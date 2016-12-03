@@ -41,6 +41,7 @@ class Food(Particle):
 		shape = pymunk.Circle(body, radius, (0,0))
 		space.add(body, shape)
 		self.shape = shape
+		self.shape.collision_type = 2
 	def draw(self):
 		p = offset(self.shape.body.position)
 		pygame.draw.circle(screen, (255,0,0), p, max(2, int(self.shape.radius * Z)), 2)
@@ -66,8 +67,8 @@ class Cell(Particle):
 		body.position = x, y
 		shape = pymunk.Circle(body, radius, (0,0))
 		space.add(body, shape)
-		space.shape = True
 		self.shape = shape
+		self.shape.collision_type = 1
 		# soul
 		self.divisionProb = 0.003	
 	def draw(self):
@@ -120,6 +121,14 @@ def draw_lines(screen, lines):
 		p2 = offset(pv2)
 		pygame.draw.lines(screen, (255,255,255), False, [p1,p2])
 
+def draw_collision(arbiter, space, data):
+    for c in arbiter.contact_point_set.points:
+        r = max( 3, abs(c.distance*5) )
+        r = int(r)
+        p = c.point_a
+	p = offset(p)
+        pygame.draw.circle(data["surface"], (0,255,0), p, r, 0)
+
 
 pygame.init()
 infoObject = pygame.display.Info()
@@ -134,12 +143,16 @@ clock = pygame.time.Clock()
 space = pymunk.Space()
 lines = add_borders(space)
 particles = []
+ch = space.add_collision_handler(1, 2)
+ch.data["surface"] = screen
+ch.post_solve = draw_collision
 
+running = True
 particles.append(Cell())
 ticks_to_next_food = 25
 
-while True:
-	pygame.display.set_caption("GOD [%d:%d] zoom: %f\t%d" % (X, Y, Z, len(particles)))
+while running:
+	pygame.display.set_caption("GOD\tFPS: %2.2f\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), X, Y, Z, len(particles)))
  	screen.fill((0,0,0))
 	draw_lines(screen, lines)
 
@@ -185,9 +198,10 @@ while True:
 		Z = min(10, Z)
 	for event in pygame.event.get():
 		if event.type == QUIT:
-			sys.exit(0)
+			running = False
 		if event.type == KEYDOWN and event.key == K_f:
 			pygame.display.toggle_fullscreen()
 		elif event.type == KEYDOWN and event.key == K_ESCAPE:
-			pygame.quit()
-			sys.exit(0)
+			running = False
+sys.exit(0)
+pygame.quit()
