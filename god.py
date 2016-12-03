@@ -13,8 +13,11 @@ bY = (-500, 500)
 brown = 10
 massToEn = 100
 pi = 3.1415
-costExist = 0.3 # per cycle
+
+rateExist = 0.3
 costDivide = 100
+rateTransfer = 20
+costTransfer = 1
 
 
 class Particle(object):
@@ -27,8 +30,18 @@ class Particle(object):
 	def brownian(self):	
 		impulse = (random.randint(-brown,brown), random.randint(-brown,brown) )
 		self.shape.body.apply_impulse_at_local_point(impulse)
-	def check_division(self):
+	def check_division(self): # dummy function
 		return False
+	def steal_energy(self, energy):
+		if self.energy >= energy:
+			self.energy -= energy
+			return energy
+		else:
+			self.erergy = 0
+			return self.energy
+	def add_energy(self, energy):
+		self.energy += energy
+		self.energy -= costTransfer
 
 class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
@@ -41,13 +54,15 @@ class Food(Particle):
 		shape = pymunk.Circle(body, radius, (0,0))
 		space.add(body, shape)
 		self.shape = shape
+		self.shape.Particle = self
 		self.shape.collision_type = 2
 	def draw(self):
 		p = offset(self.shape.body.position)
 		pygame.draw.circle(screen, (255,0,0), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
-		self.energy -= costExist
+		self.energy -= rateExist
 		self._adjust_attributes()
+		
 	def _adjust_attributes(self):
 		mass = self.energy / massToEn
 		radius = radius_from_area(self.energy)
@@ -68,6 +83,7 @@ class Cell(Particle):
 		shape = pymunk.Circle(body, radius, (0,0))
 		space.add(body, shape)
 		self.shape = shape
+		self.shape.Particle = self
 		self.shape.collision_type = 1
 		# soul
 		self.divisionProb = 0.003	
@@ -75,7 +91,7 @@ class Cell(Particle):
 		p = offset(self.shape.body.position)
 		pygame.draw.circle(screen, (0,0,255), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
-		self.energy -= costExist
+		self.energy -= rateExist
 		self._adjust_attributes()
 	def check_division(self):
 		rand = random.random()
@@ -121,14 +137,12 @@ def draw_lines(screen, lines):
 		p2 = offset(pv2)
 		pygame.draw.lines(screen, (255,255,255), False, [p1,p2])
 
-def draw_collision(arbiter, space, data):
-    for c in arbiter.contact_point_set.points:
-        r = max( 3, abs(c.distance*5) )
-        r = int(r)
-        p = c.point_a
-	p = offset(p)
-        pygame.draw.circle(data["surface"], (0,255,0), p, r, 0)
-
+def collision_cell_with_food(arbiter, space, data):
+	a,b = arbiter.shapes
+	cell = a.Particle
+	food = b.Particle
+	energy = food.steal_energy(rateTransfer)
+	cell.add_energy(energy)
 
 pygame.init()
 infoObject = pygame.display.Info()
@@ -143,9 +157,8 @@ clock = pygame.time.Clock()
 space = pymunk.Space()
 lines = add_borders(space)
 particles = []
-ch = space.add_collision_handler(1, 2)
-ch.data["surface"] = screen
-ch.post_solve = draw_collision
+colHandler_CF = space.add_collision_handler(1, 2)
+colHandler_CF.post_solve = collision_cell_with_food
 
 running = True
 particles.append(Cell())
@@ -159,7 +172,7 @@ while running:
 	ticks_to_next_food -= 1
 	if ticks_to_next_food <= 0:
 		ticks_to_next_food = 20
-		particle = Food()
+		particle = Food(x = random.randint(bX[0],bX[1]), y = random.randint(bY[0], bY[1]))
 		particles.append(particle)
 
 	particlesToRemove = []
@@ -203,5 +216,6 @@ while running:
 			pygame.display.toggle_fullscreen()
 		elif event.type == KEYDOWN and event.key == K_ESCAPE:
 			running = False
-sys.exit(0)
+pygame.display.quit()
 pygame.quit()
+sys.exit(0)
