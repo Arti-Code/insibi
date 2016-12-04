@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import sys, random
 import pygame
@@ -12,7 +12,7 @@ import numpy as np
 bX = (-2000, 2000)
 bY = (-2000, 2000)
 spawnSigma = 400
-foodInterval = 10
+foodInterval = 5
 mutateInterval = 100
 brown = 5
 pi = 3.1415
@@ -20,6 +20,7 @@ pi = 3.1415
 maxElasticity = 0.99
 nActivations = 8 # IN: energy OUT: division-prob elasticity # 5 internal states
 mutRange = 0.05
+maxAge = 1000
 
 massToEn = 100
 maxEn = 3000
@@ -35,18 +36,17 @@ class Particle(object):
 		y = self.shape.body.position.y
 		exitBorders = x < bX[0] or y < bY[0] or x > bX[1] or y > bY[1]
 		noEnergy = self.energy <= 0
-		return exitBorders or noEnergy
+		oldAge = self.age > maxAge
+		return exitBorders or noEnergy or oldAge
 	def brownian(self):	
 		impulse = (random.randint(-brown,brown), random.randint(-brown,brown) )
 		self.shape.body.apply_impulse_at_local_point(impulse)
-	def steal_energy(self, energy):
-		if self.energy >= energy:
-			self.energy -= energy
-			return energy
-		else:
-			self.energy = 0
-			return self.energy
-	def add_energy(self, energy):
+	def steal_energy(self, other, energy):
+		demand = maxEn - self.energy
+		energy = min(energy, demand) # self can't remove more energy than it can swallow
+		supply = other.energy
+		energy = min(energy, supply)
+		other.energy -= energy
 		self.energy += energy
 		self.energy -= costTransfer
 	def check_division(self): # dummy function
@@ -56,6 +56,7 @@ class Particle(object):
 
 class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
+		self.age = 0
 		self.energy = energy
 		mass = self.energy / massToEn
 		radius = max(1, radius_from_area(self.energy))
@@ -68,9 +69,10 @@ class Food(Particle):
 		self.shape.Particle = self
 		self.shape.collision_type = 2
 	def draw(self):
-		p = offset(self.shape.body.position)
+		p = world_to_view(self.shape.body.position)
 		pygame.draw.circle(screen, (100,100,100), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
+		self.age += 1
 		self.energy -= rateExist
 		self._adjust_attributes()
 	def _adjust_attributes(self):
@@ -83,6 +85,7 @@ class Food(Particle):
 
 class Cell(Particle):
 	def __init__(self, x=0, y=0, energy=1000, parrent=None):
+		self.age = 0
 		self.energy = energy
 		mass = max(1, self.energy / massToEn)
 		radius = max(1, radius_from_area(self.energy))
@@ -106,6 +109,7 @@ class Cell(Particle):
 			self.activations = 	np.copy(parrent.activations)
 			self.color = 		np.copy(parrent.color)
 	def step(self):
+		self.age += 1
 		# energy handling
 		self.energy = min(maxEn, self.energy)
 		self.energy -= rateExist
@@ -129,7 +133,7 @@ class Cell(Particle):
 		if (self.energy - costDivide) / 2 < 0: return False
 		return self.division > 0
 	def divide(self):
-		print "energy; %d\nweights:\n%s\nbiases:\n%s\n" % (self.energy, self.weights, self.biases)
+# 		print "energy; %d\nweights:\n%s\nbiases:\n%s\n" % (self.energy, self.weights, self.biases)
 		self.energy -= costDivide
 		self.energy /= 2
 		self._adjust_attributes()
@@ -139,7 +143,7 @@ class Cell(Particle):
 		newCell.mutate()
 		return newCell
 	def draw(self):
-		p = offset(self.shape.body.position)
+		p = world_to_view(self.shape.body.position)
 		color = (int(self.color[0]*255), int(self.color[1]*255), int(self.color[2]*255))
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
 	def _adjust_attributes(self):
@@ -153,8 +157,11 @@ class Cell(Particle):
 def radius_from_area(area):
 	if area <= 0: return 0
 	return math.sqrt(area / pi)
-def offset(p):
+def world_to_view(p):
 	return int((p.x + X) * Z + screenOffX ), int((p.y + Y) * Z + screenOffY)
+def view_to_world(p):
+	x, y = p
+	return int(((x - screenOffX) / Z ) - X ), int(((y - screenOffY) / Z ) - Y )
 def add_borders(space):
 	body = pymunk.Body(body_type = pymunk.Body.STATIC)
 	body.position = (0, 0)
@@ -169,15 +176,14 @@ def draw_lines(screen, lines):
 		body = line.body
 		pv1 = body.position + line.a.rotated(body.angle)
 		pv2 = body.position + line.b.rotated(body.angle)
-		p1 = offset(pv1)
-		p2 = offset(pv2)
+		p1 = world_to_view(pv1)
+		p2 = world_to_view(pv2)
 		pygame.draw.lines(screen, (255,255,255), False, [p1,p2])
 def collision_cell_with_food(arbiter, space, data):
 	a,b = arbiter.shapes
 	cell = a.Particle
 	food = b.Particle
-	energy = food.steal_energy(rateTransfer)
-	cell.add_energy(energy)
+	cell.steal_energy(food, rateTransfer)
 
 pygame.init()
 infoObject = pygame.display.Info()
@@ -197,7 +203,10 @@ colHandler_CF = space.add_collision_handler(1, 2)
 colHandler_CF.post_solve = collision_cell_with_food
 
 running = True
-for i in range(10):
+pause = False
+follow = None
+
+for i in range(50):
 	x = random.gauss(0, spawnSigma)	
 	y = random.gauss(0, spawnSigma)	
 	particles.append(Cell(x=x, y=y))
@@ -205,46 +214,61 @@ for i in range(100):
 	x = random.gauss(0, spawnSigma)	
 	y = random.gauss(0, spawnSigma)	
 	particles.append( Food(x=x, y=y) )
+particlesToRemove = []
+particlesToAdd = []
 
 while running:
 	pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
- 	screen.fill((0,0,0))
+	screen.fill((0,0,0))
 	draw_lines(screen, lines)
-
-	if step % foodInterval == 0:
-		x = random.gauss(0, spawnSigma)	
-		y = random.gauss(0, spawnSigma)	
-		particles.append(Food(x=x, y=y))
-
-	particlesToRemove = []
-	particlesToAdd = []
 	for particle in particles:
-		particle.brownian()
-		particle.step()
 		particle.draw()
-		if space.current_time_step % mutateInterval == 0:
-			particle.mutate()
-		if particle.check_division(): 	particlesToAdd.append(particle.divide())
-		if particle.check_remove(): 	particlesToRemove.append(particle)
-	for particle in particlesToRemove:
-		space.remove(particle.shape, particle.shape.body)
-		particles.remove(particle)
-	particles.extend(particlesToAdd)
-
-	space.step(1/50.0)
+	if follow:
+		X, Y = - follow.shape.body.position
+		font = pygame.font.SysFont("monospace", 36)
+		string = "Energy: %4d  Age: %4d" % (follow.energy, follow.age)
+		text = font.render(string, 1, (255,255,255))
+		textpos = text.get_rect()
+		textpos.centerx = screen.get_rect().centerx
+		screen.blit(text, textpos)
+		if follow.check_remove(): follow = None
 	pygame.display.flip()
-	clock.tick(50)
-	step += 1
 
+	if not pause:
+		if step % foodInterval == 0:
+			x = random.gauss(0, spawnSigma)	
+			y = random.gauss(0, spawnSigma)	
+			particlesToAdd.append(Food(x=x, y=y))
+		for particle in particles:
+			particle.brownian()
+			particle.step()
+			if space.current_time_step % mutateInterval == 0:
+				particle.mutate()
+			if particle.check_division(): 	particlesToAdd.append(particle.divide())
+			if particle.check_remove(): 	particlesToRemove.append(particle)
+		for particle in particlesToRemove:
+			space.remove(particle.shape, particle.shape.body)
+			particles.remove(particle)
+		particles.extend(particlesToAdd)
+		particlesToRemove = []
+		particlesToAdd = []
+		space.step(1/50.0)
+		clock.tick(50)
+		step += 1
+	
 	keys = pygame.key.get_pressed()
 	if keys[K_RIGHT]:
 		X -= 10
+		follow = None
 	if keys[K_LEFT]:
 		X += 10
+		follow = None
 	if keys[K_UP]:
 		Y += 10
+		follow = None
 	if keys[K_DOWN]:
 		Y -= 10
+		follow = None
 	if keys[K_PERIOD]:
 		Z += 0.01
 		Z = max(0, Z)
@@ -258,6 +282,18 @@ while running:
 			running = False
 		if event.type == KEYDOWN and event.key == K_f:
 			pygame.display.toggle_fullscreen()
+		if event.type == KEYDOWN and event.key == K_SPACE:
+			pause = not pause
+		if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
+			mousePos = pygame.mouse.get_pos()
+			mousePos = view_to_world(mousePos)
+			point = space.point_query_nearest(mousePos, 0, pymunk.ShapeFilter())
+			if point:
+				follow = point.shape.Particle
+		if event.type == pygame.MOUSEBUTTONUP and event.button == 3: # right=3
+			mousePos = pygame.mouse.get_pos()
+			mousePos = view_to_world(mousePos)
+			particlesToAdd.append(Food(x=mousePos[0], y=mousePos[1]))
 		elif event.type == KEYDOWN and event.key == K_ESCAPE:
 			running = False
 pygame.display.quit()
