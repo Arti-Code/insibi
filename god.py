@@ -9,18 +9,20 @@ from pymunk import Vec2d
 import math
 import numpy as np
 
-bX = (-500, 500)
-bY = (-500, 500)
+bX = (-2000, 2000)
+bY = (-2000, 2000)
+spawnSigma = 400
+foodInterval = 10
+mutateInterval = 100
 brown = 5
-massToEn = 100
 pi = 3.1415
-nInputs = 1 	# energy
-nOutputs = 1	# division-prob
 
-mutateStep = 100
+maxElasticity = 0.99
+nActivations = 8 # IN: energy OUT: division-prob elasticity # 5 internal states
 mutRange = 0.05
 
-maxEn = 1000
+massToEn = 100
+maxEn = 3000
 rateExist = 0.3
 costDivide = 100
 rateTransfer = 50
@@ -53,7 +55,7 @@ class Particle(object):
 		pass
 
 class Food(Particle):
-	def __init__(self, x=0, y=0, energy=maxEn):
+	def __init__(self, x=0, y=0, energy=1000):
 		self.energy = energy
 		mass = self.energy / massToEn
 		radius = max(1, radius_from_area(self.energy))
@@ -80,7 +82,7 @@ class Food(Particle):
 		self.shape.body.mass = mass
 
 class Cell(Particle):
-	def __init__(self, x=0, y=0, energy=10000, parrent=None):
+	def __init__(self, x=0, y=0, energy=1000, parrent=None):
 		self.energy = energy
 		mass = max(1, self.energy / massToEn)
 		radius = max(1, radius_from_area(self.energy))
@@ -93,42 +95,41 @@ class Cell(Particle):
 		self.shape.Particle = self
 		self.shape.collision_type = 1
 		if parrent is None:
-			self.weights = 		np.random.rand(nOutputs, nInputs) * 2 - 1
-			self.biases = 		np.random.rand(nOutputs, 1) * 2 - 1
-			self.inputs = 		np.zeros((nInputs, 1))
-			self.activations = 	np.zeros((nInputs, 1))
+			self.weights = 		np.random.rand(nActivations, nActivations) * 2 - 1
+			self.biases = 		np.random.rand(nActivations, 1) * 2 - 1
+			self.activations = 	np.zeros((nActivations, 1))
 			self.color = 		np.random.rand(3)
 		else:
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
 			self.biases = 		np.copy(parrent.biases)
-			self.inputs = 		np.copy(parrent.inputs)
 			self.activations = 	np.copy(parrent.activations)
 			self.color = 		np.copy(parrent.color)
 	def step(self):
-		# body
+		# energy handling
 		self.energy = min(maxEn, self.energy)
 		self.energy -= rateExist
 		self._adjust_attributes()
-		# soul
-		self.inputs[0,0] = self.energy / maxEn
-		self.activations = np.tanh( np.dot(self.weights, self.inputs) + self.biases ) # drop thrugh tanh non-liniearity like in nn
+		# regulatory network
+		self.activations[0,0] = self.energy / maxEn
+		self.activations = np.tanh( np.dot(self.weights, self.activations) + self.biases ) # drop thrugh tanh non-liniearity like in nn
 		np.clip(self.activations, -1, 1) # clip to range -1..1
-		self.division = self.activations[0,0]
+		self.division = self.activations[1,0]
+		self.shape.elasticity = min(maxElasticity, self.activations[2,0] + 1)
 	def mutate(self):
-		i = random.randint(0, nOutputs-1)
-		j = random.randint(0, nInputs-1)
-		self.weights[i,j] += random.uniform(-mutRange, mutRange)
-		i = random.randint(0, nOutputs-1)
-		self.biases += random.uniform(-mutRange, mutRange)
+		i = random.randint(0, nActivations-1)
+		j = random.randint(0, nActivations-1)
+		self.weights[i,j] += random.gauss(0, mutRange)
+		i = random.randint(0, nActivations-1)
+		self.biases += random.gauss(0, mutRange)
 		i = random.randint(0, 2)
-		self.color[i] += random.uniform(-mutRange, mutRange)
+		self.color[i] += random.gauss(0, mutRange)
 		self.color[i] = min(1, max(0, self.color[i]))
 	def check_division(self):
 		if (self.energy - costDivide) / 2 < 0: return False
 		return self.division > 0
 	def divide(self):
-		print self.energy, self.weights, self.biases
+		print "energy; %d\nweights:\n%s\nbiases:\n%s\n" % (self.energy, self.weights, self.biases)
 		self.energy -= costDivide
 		self.energy /= 2
 		self._adjust_attributes()
@@ -142,12 +143,12 @@ class Cell(Particle):
 		color = (int(self.color[0]*255), int(self.color[1]*255), int(self.color[2]*255))
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
 	def _adjust_attributes(self):
-		mass = self.energy / massToEn
-		radius = radius_from_area(self.energy)
+		mass = self.energy / massToEn # mass
 		mass = max(1, mass)
+		self.shape.body.mass = mass
+		radius = radius_from_area(self.energy) # radius
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
-		self.shape.body.mass = mass
 
 def radius_from_area(area):
 	if area <= 0: return 0
@@ -183,7 +184,7 @@ infoObject = pygame.display.Info()
 dim = (infoObject.current_w, infoObject.current_h)
 screenOffX, screenOffY = infoObject.current_w / 2, infoObject.current_h / 2
 X, Y = 0, 0
-Z = 0.85
+Z = 1
 step = 0
 
 screen = pygame.display.set_mode(dim)
@@ -197,21 +198,23 @@ colHandler_CF.post_solve = collision_cell_with_food
 
 running = True
 for i in range(10):
-	particles.append(Cell(x = random.randint(bX[0],bX[1]), y = random.randint(bY[0], bY[1])))
-for i in range(50):
-	particles.append(Food(x = random.randint(bX[0],bX[1]), y = random.randint(bY[0], bY[1])))
-ticks_to_next_food = 25
+	x = random.gauss(0, spawnSigma)	
+	y = random.gauss(0, spawnSigma)	
+	particles.append(Cell(x=x, y=y))
+for i in range(100):
+	x = random.gauss(0, spawnSigma)	
+	y = random.gauss(0, spawnSigma)	
+	particles.append( Food(x=x, y=y) )
 
 while running:
 	pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
  	screen.fill((0,0,0))
 	draw_lines(screen, lines)
 
-	ticks_to_next_food -= 1
-	if ticks_to_next_food <= 0:
-		ticks_to_next_food = 20
-		particle = Food(x = random.randint(bX[0],bX[1]), y = random.randint(bY[0], bY[1]))
-		particles.append(particle)
+	if step % foodInterval == 0:
+		x = random.gauss(0, spawnSigma)	
+		y = random.gauss(0, spawnSigma)	
+		particles.append(Food(x=x, y=y))
 
 	particlesToRemove = []
 	particlesToAdd = []
@@ -219,7 +222,7 @@ while running:
 		particle.brownian()
 		particle.step()
 		particle.draw()
-		if space.current_time_step % mutateStep == 0:
+		if space.current_time_step % mutateInterval == 0:
 			particle.mutate()
 		if particle.check_division(): 	particlesToAdd.append(particle.divide())
 		if particle.check_remove(): 	particlesToRemove.append(particle)
@@ -259,4 +262,4 @@ while running:
 			running = False
 pygame.display.quit()
 pygame.quit()
-# sys.exit(0)
+sys.exit(0)
