@@ -1,40 +1,38 @@
 #!/home/david/anaconda3/bin/python
 
+import pdb
 import sys, random
-import pygame
-from pygame.locals import *
 import pymunk
-import pymunk.pygame_util
 from pymunk import Vec2d
 import math
 import numpy as np
 import scipy
 from scipy import ndimage
+import cv2
+import datetime
+import pickle
+import readline
+import select
 # from numba import jit
 
+# world constants
 bX = (-2000, 2000)
 bY = (-2000, 2000)
-wX = bX[1] - bX[0]
-wY = bY[1] - bY[0]
 liquidGrain = 50
-liquidNx = int( (bX[1] - bX[0]) / liquidGrain )
-liquidNy = int( (bY[1] - bY[0]) / liquidGrain )
 dispersion = 1
+smellDegrade = 0.99
+brown = 5
 spawnSigma = 400
 foodInterval = 5
-mutateInterval = 100
-brown = 5
-pi = 3.1415
 
+# particle constants
 maxElasticity = 0.99
-nInternal = 5
-states = ["inEnergy", "inSmell", "outDivision", "outElasticity", "outSmell"] + ["internal_%d" % (i+1) for i in range(nInternal)]
-nActivations = len(states)
-states = {name:i for i, name in enumerate(states)}
+nActivations = 10
+mutateInterval = 100
 mutRange = 0.05
 maxAge = 1000
-smellDegrade = 0.99
 
+# cost and rate constants
 massToEn = 100
 maxEn = 3000
 rateExist = 0.3
@@ -42,6 +40,17 @@ costDivide = 100
 rateTransfer = 50
 costTransfer = 1
 
+# for save function
+constants = {"bX":bX, "bY":bY, "liquidGrain":liquidGrain, "dispersion":dispersion, "smellDegrade": smellDegrade, "brown": brown,
+	"spawnSigma":spawnSigma, "foodInterval":foodInterval, "maxElasticity":maxElasticity, "nActivations":nActivations, 
+	"mutateInterval": mutateInterval, "mutRange":mutRange, "maxAge":maxAge, "massToEn":massToEn, "rateExist":rateExist,
+	"costDivide":costDivide, "rateTransfer":rateTransfer, "costTransfer":costTransfer}
+
+# derived constants
+wX = bX[1] - bX[0]
+wY = bY[1] - bY[0]
+liquidNx = int( (bX[1] - bX[0]) / liquidGrain )
+liquidNy = int( (bY[1] - bY[0]) / liquidGrain )
 
 class Particle(object):
 	def check_remove(self):
@@ -62,6 +71,9 @@ class Particle(object):
 		other.energy -= energy
 		self.energy += energy
 		self.energy -= costTransfer
+	def deshape(self):
+		self.shape = None
+		return None # expand to save shape parameters not allready encoded with energy and activations
 	def check_division(self): # dummy function
 		return False
 	def mutate(self):
@@ -128,14 +140,13 @@ class Cell(Particle):
 		self.energy -= rateExist
 		self._adjust_attributes()
 		# regulatory network
-		self.activations[states["inEnergy"],0] = self.energy / maxEn
-		self.activations[states["inSmell"],0] = get_smell(self.shape.body.position)
+		self.activations[0,0] = self.energy / maxEn # IN energy
+		self.activations[1,0] = get_smell(self.shape.body.position) # IN smell
 		self.activations = np.tanh( np.dot(self.weights, self.activations) + self.biases ) # drop thrugh tanh non-liniearity like in nn
 		np.clip(self.activations, -1, 1) # clip to range -1..1
-		self.division = self.activations[states["outDivision"],0]
-		self.shape.elasticity = min(maxElasticity, self.activations[states["outElasticity"],0] + 1)
-		outSmell = self.activations[states["outSmell"],0]
-		set_smell(self.shape.body.position, outSmell)
+		self.division = self.activations[2,0] # OUT division
+		self.shape.elasticity = min(maxElasticity, self.activations[3,0] + 1) # OUT elasticity
+		set_smell(self.shape.body.position, self.activations[4,0]) # OUT smell
 	def mutate(self):
 		i = random.randint(0, nActivations-1)
 		j = random.randint(0, nActivations-1)
@@ -149,7 +160,6 @@ class Cell(Particle):
 		if (self.energy - costDivide) / 2 < 0: return False
 		return self.division > 0
 	def divide(self):
-# 		print "energy; %d\nweights:\n%s\nbiases:\n%s\n" % (self.energy, self.weights, self.biases)
 		self.energy -= costDivide
 		self.energy /= 2
 		self._adjust_attributes()
@@ -172,7 +182,7 @@ class Cell(Particle):
 		self.shape.unsafe_set_radius(radius)
 def radius_from_area(area):
 	if area <= 0: return 0
-	return math.sqrt(area / pi)
+	return math.sqrt(area / 3.141592)
 def world_to_view(p):
 	x, y = p
 	return int((x + X) * Z + screenOffX ), int((y + Y) * Z + screenOffY)
@@ -202,7 +212,7 @@ def collision_cell_with_food(arbiter, space, data):
 	food = b.Particle
 	cell.steal_energy(food, rateTransfer)
 def disperse_liquid(liquid):
-	return scipy.ndimage.filters.gaussian_filter(liquid, dispersion)
+	return cv2.blur(liquid, (3,3)) 
 def set_smell(pos, smell):
 	x, y = pos
 	x = x + (bX[1] - bX[0]) / 2 # x with 0 at leftmost corner of world
@@ -237,65 +247,50 @@ def draw_liquid():
 			x = int( (i-i1) * recXwidth )
 			y = int( (j-j1) * recYwidth )
 			pygame.draw.rect(screen, color, (x,y,recXwidth, recYwidth))
-
-pygame.init()
-infoObject = pygame.display.Info()
-dim = (infoObject.current_w, infoObject.current_h)
-screenOffX, screenOffY = infoObject.current_w / 2, infoObject.current_h / 2
-X, Y = 0, 0
-Z = 1
-step = 0
-
-screen = pygame.display.set_mode(dim)
-pygame.display.toggle_fullscreen()
-clock = pygame.time.Clock()
+def save(constants, step, liquid, particles, saveFile):
+	with open(saveFile, 'wb') as file:
+		pickle.dump(constants, file, protocol=pickle.HIGHEST_PROTOCOL)
+		pickle.dump(step, file, protocol=pickle.HIGHEST_PROTOCOL)
+		pickle.dump(liquid, file, protocol=pickle.HIGHEST_PROTOCOL)
+		for particle in particles:
+			tmpShape = particle.shape
+			shapeVals = particle.deshape()
+			pickle.dump(particle, file, protocol=pickle.HIGHEST_PROTOCOL)
+			particle.shape = tmpShape
+		
 space = pymunk.Space(threaded=True)
 space.threads = 2 # max number of threads
-space.iterations = 5
+space.iterations = 1 # minimum number of iterations for rougth but fast collision detection
 lines = add_borders(space)
 liquid = np.zeros( (liquidNx, liquidNy) )
 particles = []
 colHandler_CF = space.add_collision_handler(1, 2)
 colHandler_CF.post_solve = collision_cell_with_food
-
-running = True
-draw = True
-pause = False
-follow = None
-displaySmell = True
-
-for i in range(50):
-	x = random.gauss(0, spawnSigma)	
-	y = random.gauss(0, spawnSigma)	
-	particles.append(Cell(x=x, y=y))
-for i in range(100):
-	x = random.gauss(0, spawnSigma)	
-	y = random.gauss(0, spawnSigma)	
-	particles.append( Food(x=x, y=y) )
 particlesToRemove = []
 particlesToAdd = []
+running = True
+pause = False
+display = False
+step = 0
 
 while running:
-	pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
-	if draw:
-		screen.fill((0,0,0))
-		draw_lines(screen, lines)
-		if displaySmell:
-			draw_liquid()
-		for particle in particles:
-			particle.draw()
-		if follow:
-			X, Y = - follow.shape.body.position
-			font = pygame.font.SysFont("monospace", 36)
-			string = "Energy: %4d  Age: %4d" % (follow.energy, follow.age)
-			text = font.render(string, 1, (255,255,255))
-			textpos = text.get_rect()
-			textpos.centerx = screen.get_rect().centerx
-			screen.blit(text, textpos)
-			if follow.check_remove(): follow = None
-		pygame.display.flip()
-
 	if not pause:
+		if step % 100000 == 0 and step != 0:
+			saveFile = "saves/%s_%s.god" % (datetime.date.today(), step)
+			save(constants, step, liquid, particles, saveFile)
+		if step % 1000 == 0:
+			food, cells = 0, 0
+			for particle in particles:
+				if isinstance(particle, Cell): cells += 1
+				if isinstance(particle, Food): food += 1
+			if cells == 0:
+				step = 0
+				for i in range(50):
+					x = random.gauss(0, spawnSigma)	
+					y = random.gauss(0, spawnSigma)	
+					particles.append(Cell(x=x, y=y))
+			print("\b"*100 + " "*100 + "\b"*100, end="", flush=True)
+			print("#\t%8d\tcells:%5d\tfood:%5d" % (step, cells, food))
 		if step % foodInterval == 0:
 			x = random.gauss(0, spawnSigma)	
 			y = random.gauss(0, spawnSigma)	
@@ -318,53 +313,93 @@ while running:
 		liquid *= smellDegrade
 		np.clip(liquid, 0, 1)
 		space.step(1/50.0)
-		clock.tick(50)
 		step += 1
-	
-	keys = pygame.key.get_pressed()
-	if keys[K_RIGHT]:
-		X -= 10
-		follow = None
-	if keys[K_LEFT]:
-		X += 10
-		follow = None
-	if keys[K_UP]:
-		Y += 10
-		follow = None
-	if keys[K_DOWN]:
-		Y -= 10
-		follow = None
-	if keys[K_PERIOD]:
-		Z += 0.01
-		Z = max(0, Z)
-		Z = min(10, Z)
-	if keys[K_COMMA]:
-		Z -= 0.01
-		Z = max(0, Z)
-		Z = min(10, Z)
-	for event in pygame.event.get():
-		if event.type == QUIT:
-			running = False
-		if event.type == KEYDOWN and event.key == K_f:
+		if display:
+	 		clock.tick(50)
+
+	inStr = select.select([sys.stdin,],[],[],0.0)[0] # check if input is pending
+	if inStr:
+		inStr = input()
+		if inStr == "display" or inStr == "d":
+			import pygame
+			from pygame.locals import *
+			import pymunk.pygame_util
+			pygame.init()
+			infoObject = pygame.display.Info()
+			dim = (infoObject.current_w, infoObject.current_h)
+			screenOffX, screenOffY = infoObject.current_w / 2, infoObject.current_h / 2
+			screen = pygame.display.set_mode(dim)
 			pygame.display.toggle_fullscreen()
-		if event.type == KEYDOWN and event.key == K_SPACE:
-			pause = not pause
-		if event.type == KEYDOWN and event.key == K_d:
-			draw = not draw
-		if event.type == KEYDOWN and event.key == K_s:
-			displaySmell = not displaySmell
-		if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
-			mousePos = pygame.mouse.get_pos()
-			mousePos = view_to_world(mousePos)
-			point = space.point_query_nearest(mousePos, 0, pymunk.ShapeFilter())
-			if point:
-				follow = point.shape.Particle
-		if event.type == pygame.MOUSEBUTTONUP and event.button == 3: # right=3
-			mousePos = pygame.mouse.get_pos()
-			mousePos = view_to_world(mousePos)
-			particlesToAdd.append(Food(x=mousePos[0], y=mousePos[1]))
-		elif event.type == KEYDOWN and event.key == K_ESCAPE:
+			clock = pygame.time.Clock()
+			follow = None
+			displaySmell = True
+			display = True
+			X, Y = 0, 0
+			Z = 1
+		elif inStr == "exit" or inStr == "e":
 			running = False
-pygame.display.quit()
-pygame.quit()
-sys.exit(0)
+	if display:
+		try:
+			pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
+			screen.fill((0,0,0))
+			draw_lines(screen, lines)
+			if displaySmell:
+				draw_liquid()
+			for particle in particles:
+				particle.draw()
+			if follow:
+				X, Y = - follow.shape.body.position
+				font = pygame.font.SysFont("monospace", 36)
+				string = "Energy: %4d  Age: %4d" % (follow.energy, follow.age)
+				text = font.render(string, 1, (255,255,255))
+				textpos = text.get_rect()
+				textpos.centerx = screen.get_rect().centerx
+				screen.blit(text, textpos)
+				if follow.check_remove(): follow = None
+			pygame.display.flip()
+			keys = pygame.key.get_pressed()
+			if keys[K_RIGHT]:
+				X -= 10
+				follow = None
+			if keys[K_LEFT]:
+				X += 10
+				follow = None
+			if keys[K_UP]:
+				Y += 10
+				follow = None
+			if keys[K_DOWN]:
+				Y -= 10
+				follow = None
+			if keys[K_PERIOD]:
+				Z += 0.01
+				Z = max(0, Z)
+				Z = min(10, Z)
+			if keys[K_COMMA]:
+				Z -= 0.01
+				Z = max(0, Z)
+				Z = min(10, Z)
+			for event in pygame.event.get():
+				if event.type == QUIT or event.type == KEYDOWN and event.key == K_ESCAPE:
+					pygame.display.quit()
+					pygame.quit()
+					display = False
+				if event.type == KEYDOWN and event.key == K_f:
+					pygame.display.toggle_fullscreen()
+				if event.type == KEYDOWN and event.key == K_SPACE:
+					pause = not pause
+				if event.type == KEYDOWN and event.key == K_d:
+					draw = not draw
+				if event.type == KEYDOWN and event.key == K_s:
+					displaySmell = not displaySmell
+				if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
+					mousePos = pygame.mouse.get_pos()
+					mousePos = view_to_world(mousePos)
+					point = space.point_query_nearest(mousePos, 0, pymunk.ShapeFilter())
+					if point:
+						follow = point.shape.Particle
+				if event.type == pygame.MOUSEBUTTONUP and event.button == 3: # right=3
+					mousePos = pygame.mouse.get_pos()
+					mousePos = view_to_world(mousePos)
+					particlesToAdd.append(Food(x=mousePos[0], y=mousePos[1]))
+		except:
+			display = False
