@@ -14,23 +14,35 @@ import pickle
 import readline
 import select
 # from numba import jit
+# random.seed(1)
+# np.random.seed(1)
 
 # world constants
 bX = (-2000, 2000)
 bY = (-2000, 2000)
 liquidGrain = 50
+nOdors = 3
 dispersion = 1
-smellDegrade = 0.99
+odorDegrade = 0.98
 brown = 5
 spawnSigma = 400
 foodInterval = 5
 
 # particle constants
+nInputs = 1 + nOdors + 1	# OUT: 	energy  N_odor  springs_attached
+nInternals = 5			# internal layers
+nOutputs = 2 + nOdors + 3	# IN:   division  elasticicty  N_odor  make_springs(break<-0.5..0.5<make)  bondLength  bondStiffness  bondDampening
+inputLength  = nInputs + nInternals
+stateLength  = nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
+outputLength =           nInternals + nOutputs
+maxAge = 1000
 maxElasticity = 0.99
-nActivations = 10
+maxBonds = 6
+minBondLength = 1
+maxBondLength = 20
 mutateInterval = 100
 mutRange = 0.05
-maxAge = 1000
+foodOdor = np.array([0,0,0.5])
 
 # cost and rate constants
 massToEn = 100
@@ -41,8 +53,8 @@ rateTransfer = 50
 costTransfer = 1
 
 # for save function
-constants = {"bX":bX, "bY":bY, "liquidGrain":liquidGrain, "dispersion":dispersion, "smellDegrade": smellDegrade, "brown": brown,
-	"spawnSigma":spawnSigma, "foodInterval":foodInterval, "maxElasticity":maxElasticity, "nActivations":nActivations, 
+constants = {"bX":bX, "bY":bY, "liquidGrain":liquidGrain, "dispersion":dispersion, "odorDegrade": odorDegrade, "brown": brown,
+	"spawnSigma":spawnSigma, "foodInterval":foodInterval, "maxElasticity":maxElasticity, "stateLength":stateLength, 
 	"mutateInterval": mutateInterval, "mutRange":mutRange, "maxAge":maxAge, "massToEn":massToEn, "rateExist":rateExist,
 	"costDivide":costDivide, "rateTransfer":rateTransfer, "costTransfer":costTransfer}
 
@@ -53,6 +65,14 @@ liquidNx = int( (bX[1] - bX[0]) / liquidGrain )
 liquidNy = int( (bY[1] - bY[0]) / liquidGrain )
 
 class Particle(object):
+	def __del__(self):
+		for bond in self.bonds:
+			for cell in [bond.cellA, bond.cellB]:
+				if cell != self:
+					cell.remove_bond(bond)
+			self.remove_bond(bond)
+			space.remove(bond)
+		space.remove(self.shape, self.shape.body)
 	def check_remove(self):
 		x = self.shape.body.position.x
 		y = self.shape.body.position.y
@@ -71,9 +91,14 @@ class Particle(object):
 		other.energy -= energy
 		self.energy += energy
 		self.energy -= costTransfer
+	def remove_bond(self, delBond):
+		removeBond = None
+		for bond in self.bonds:
+			if bond == delBond: removeBond = delBond
+		self.bonds.remove(delBond)
 	def deshape(self):
 		self.shape = None
-		return None # expand to save shape parameters not allready encoded with energy and activations
+		return None # expand to save shape parameters not allready encoded with energy and states
 	def check_division(self): # dummy function
 		return False
 	def mutate(self):
@@ -83,6 +108,7 @@ class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
 		self.age = 0
 		self.energy = energy
+		self.bonds = []
 		mass = self.energy / massToEn
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
@@ -95,11 +121,12 @@ class Food(Particle):
 		self.shape.collision_type = 2
 	def draw(self):
 		p = world_to_view(self.shape.body.position)
-		pygame.draw.circle(screen, (100,100,100), p, max(2, int(self.shape.radius * Z)), 2)
+		pygame.draw.circle(screen, (255,255,255), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
 		self.age += 1
 		self.energy -= rateExist
 		self._adjust_attributes()
+		set_odor(self.shape.body.position, foodOdor) # OUT odor
 	def _adjust_attributes(self):
 		mass = self.energy / massToEn
 		radius = radius_from_area(self.energy)
@@ -112,6 +139,7 @@ class Cell(Particle):
 	def __init__(self, x=0, y=0, energy=1000, parrent=None):
 		self.age = 0
 		self.energy = energy
+		self.bonds = []
 		mass = max(1, self.energy / massToEn)
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
@@ -123,16 +151,24 @@ class Cell(Particle):
 		self.shape.Particle = self
 		self.shape.collision_type = 1
 		if parrent is None:
-			self.weights = 		np.random.rand(nActivations, nActivations) * 2 - 1
-			self.biases = 		np.random.rand(nActivations, 1) * 2 - 1
-			self.activations = 	np.zeros((nActivations, 1))
+			self.weights = 		np.random.rand(outputLength, inputLength) * 2 - 1
+			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1
+			self.states = 		np.zeros((stateLength, 1))
 			self.color = 		np.random.rand(3)
+			self.bonding = 1
+			self.bLength = 1
+			self.bStiff = 1
+			self.bDamp = 1
 		else:
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
 			self.biases = 		np.copy(parrent.biases)
-			self.activations = 	np.copy(parrent.activations)
+			self.states = 		np.copy(parrent.states)
 			self.color = 		np.copy(parrent.color)
+			self.bonding = 		parrent.bonding
+			self.bLength = 		parrent.bLength
+			self.bStiff = 		parrent.bStiff
+			self.bDamp = 		parrent.bDamp
 	def step(self):
 		self.age += 1
 		# energy handling
@@ -140,18 +176,24 @@ class Cell(Particle):
 		self.energy -= rateExist
 		self._adjust_attributes()
 		# regulatory network
-		self.activations[0,0] = self.energy / maxEn # IN energy
-		self.activations[1,0] = get_smell(self.shape.body.position) # IN smell
-		self.activations = np.tanh( np.dot(self.weights, self.activations) + self.biases ) # drop thrugh tanh non-liniearity like in nn
-		np.clip(self.activations, -1, 1) # clip to range -1..1
-		self.division = self.activations[2,0] # OUT division
-		self.shape.elasticity = min(maxElasticity, self.activations[3,0] + 1) # OUT elasticity
-		set_smell(self.shape.body.position, self.activations[4,0]) # OUT smell
+		self.states[0,0] = self.energy / maxEn # IN energy
+		self.states[1:1+nOdors,0] = get_odor(self.shape.body.position) # IN odor
+		self.states[2+nOdors,0] = len(self.bonds) / (maxBonds*2)  - 1
+		self.states[nInputs:,] = np.tanh( np.dot(self.weights, self.states[:nInputs+nInternals,]) + self.biases ) # drop input and internal states thrugh tanh non-liniearity and fill them into internal states and output 
+		np.clip(self.states, -1, 1) # clip to range -1..1
+		self.division = self.states[7,0] # OUT division
+		self.shape.elasticity = min(maxElasticity, self.states[8,0] + 1) # OUT elasticity
+		set_odor(self.shape.body.position, self.states[9:9+nOdors,0]) # OUT odor
+		self.bonding = self.states[10+nOdors,0]
+		self.bLength = self.states[11+nOdors,0]
+		self.bStiff = self.states[12+nOdors,0]
+		self.bDamp = self.states[13+nOdors,0]
+		self.adjust_bonds()
 	def mutate(self):
-		i = random.randint(0, nActivations-1)
-		j = random.randint(0, nActivations-1)
+		i = random.randint(0, outputLength-1)
+		j = random.randint(0, inputLength-1)
 		self.weights[i,j] += random.gauss(0, mutRange)
-		i = random.randint(0, nActivations-1)
+		i = random.randint(0, outputLength-1)
 		self.biases += random.gauss(0, mutRange)
 		i = random.randint(0, 2)
 		self.color[i] += random.gauss(0, mutRange)
@@ -173,6 +215,12 @@ class Cell(Particle):
 		p = world_to_view(self.shape.body.position)
 		color = (int(self.color[0]*255), int(self.color[1]*255), int(self.color[2]*255))
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
+		for bond in self.bonds:
+			p1 = bond.cellA.shape.body.position
+			p2 = bond.cellB.shape.body.position
+			p1 = world_to_view(p1)
+			p2 = world_to_view(p2)
+			pygame.draw.lines(screen, (255,255,255), False, [p1,p2])
 	def _adjust_attributes(self):
 		mass = self.energy / massToEn # mass
 		mass = max(1, mass)
@@ -180,6 +228,35 @@ class Cell(Particle):
 		radius = radius_from_area(self.energy) # radius
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
+	def bond(self, other):
+		if self.bonding < 0.5 or other.bonding < 0.5: return
+		if len(self.bonds) >= maxBonds or len(other.bonds) >= maxBonds: return
+		length = abs((self.bLength + other.bLength) / 2 * 30 )
+		stiffness = abs((self.bStiff + other.bStiff) / 2 * 10 )
+		damping = abs((self.bDamp + other.bDamp) / 2 * 10 )
+		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), 30, 10, 10)
+		space.add(spring)
+		self.bonds.append(spring)
+		other.bonds.append(spring)
+		spring.cellA = self
+		spring.cellB = other
+	def adjust_bonds(self):
+		bondsToRemove = []
+		for bond in self.bonds:
+			cellA = bond.cellA
+			cellB = bond.cellB
+			if cellA != self: cellA, cellB = cellB, cellA
+			if cellB.energy < 0 or cellA.bonding < 0.5:
+				bondsToRemove.append(bond)
+				continue
+			bond.rest_length += abs(self.bLength) * 30
+			bond.rest_length = min(maxBondLength, max(minBondLength, bond.rest_length))
+			bond.stiffness += abs(self.bStiff) * 10
+			bond.damping += abs(self.bDamp) *10
+		for bond in bondsToRemove:
+# 			space.remove(bond)
+			self.bonds.remove(bond)
+			
 def radius_from_area(area):
 	if area <= 0: return 0
 	return math.sqrt(area / 3.141592)
@@ -211,22 +288,27 @@ def collision_cell_with_food(arbiter, space, data):
 	cell = a.Particle
 	food = b.Particle
 	cell.steal_energy(food, rateTransfer)
+def collision_cell_with_cell(arbiter, space, data):
+	a,b = arbiter.shapes
+	cellA = a.Particle
+	cellB = b.Particle
+	cellA.bond(cellB)
 def disperse_liquid(liquid):
 	return cv2.blur(liquid, (3,3)) 
-def set_smell(pos, smell):
+def set_odor(pos, odor):
 	x, y = pos
 	x = x + (bX[1] - bX[0]) / 2 # x with 0 at leftmost corner of world
 	i = int(x/liquidGrain)
 	y = y + (bY[1] - bY[0]) / 2 # y with 0 at leftmost corner of world
 	j = int(y/liquidGrain)
-	liquid[i,j] = smell
-def get_smell(pos):
+	liquid[i,j] = odor
+def get_odor(pos):
 	x, y = pos
-	x = x + (bX[1] - bX[0]) / 2 # x with 0 at leftmost corner of world
+	x = x + wX / 2 # x with 0 at leftmost corner of world
 	i = int(x/liquidGrain)
-	y = y + (bY[1] - bY[0]) / 2 # y with 0 at leftmost corner of world
+	y = y + wY / 2 # y with 0 at leftmost corner of world
 	j = int(y/liquidGrain)
-	return liquid[i,j]
+	return liquid[i,j,]
 def draw_liquid():
 	x1, y1 = view_to_world( (0, 0) ) # get points for rectangle of world coordinates displayed on screen
 	x2, y2 = view_to_world( (screenOffX*2,screenOffY*2) )
@@ -242,8 +324,10 @@ def draw_liquid():
 	recYwidth = int( (screenOffY*2) / (j2-j1) )
 	for i in range(i1,i2):
 		for j in range(j1, j2):
-			smell = liquid[i,j]
-			color = (255*min(1, max(0, smell)), 255*min(1, max(0, smell)), 255*min(1, max(0, smell)))
+			odors = []
+			for k in range(nOdors):
+				odors.append(liquid[i,j,k])
+			color = (255*min(1, max(0, odors[0])), 255*min(1, max(0, odors[1])), 255*min(1, max(0, odors[2])))
 			x = int( (i-i1) * recXwidth )
 			y = int( (j-j1) * recYwidth )
 			pygame.draw.rect(screen, color, (x,y,recXwidth, recYwidth))
@@ -260,12 +344,14 @@ def save(constants, step, liquid, particles, saveFile):
 		
 space = pymunk.Space(threaded=True)
 space.threads = 2 # max number of threads
-space.iterations = 1 # minimum number of iterations for rougth but fast collision detection
+space.iterations = 1 # minimum number of iterations for rough but fast collision detection
 lines = add_borders(space)
-liquid = np.zeros( (liquidNx, liquidNy) )
+liquid = np.zeros( (liquidNx, liquidNy, nOdors) )
 particles = []
-colHandler_CF = space.add_collision_handler(1, 2)
-colHandler_CF.post_solve = collision_cell_with_food
+hadler_CF = space.add_collision_handler(1, 2)
+hadler_CF.post_solve = collision_cell_with_food
+hadler_CC = space.add_collision_handler(1, 1)
+hadler_CC.post_solve = collision_cell_with_cell
 particlesToRemove = []
 particlesToAdd = []
 running = True
@@ -275,47 +361,56 @@ step = 0
 
 while running:
 	if not pause:
-		if step % 100000 == 0 and step != 0:
-			saveFile = "saves/%s_%s.god" % (datetime.date.today(), step)
-			save(constants, step, liquid, particles, saveFile)
-		if step % 1000 == 0:
+# 		if step % 100000 == 0 and step != 0: # save world
+# 			saveFile = "saves/%s_%s.god" % (datetime.date.today(), step)
+# 			save(constants, step, liquid, particles, saveFile)
+		if step % 1000 == 0: # check for living cells regulary
 			food, cells = 0, 0
 			for particle in particles:
 				if isinstance(particle, Cell): cells += 1
 				if isinstance(particle, Food): food += 1
-			if cells == 0:
+			if cells == 0: # reseed if necessary
 				step = 0
 				for i in range(50):
 					x = random.gauss(0, spawnSigma)	
 					y = random.gauss(0, spawnSigma)	
 					particles.append(Cell(x=x, y=y))
 			print("\b"*100 + " "*100 + "\b"*100, end="", flush=True)
-			print("#\t%8d\tcells:%5d\tfood:%5d" % (step, cells, food))
-		if step % foodInterval == 0:
+			print("%8d\tcells:%5d\tfood:%5d" % (step, cells, food))
+		if step % foodInterval == 0: # spawn new food
 			x = random.gauss(0, spawnSigma)	
 			y = random.gauss(0, spawnSigma)	
 			particlesToAdd.append(Food(x=x, y=y))
+
+		particlesToRemove = []
 		for particle in particles:
+			if particle.check_remove(): particlesToRemove.append(particle)
+		for particle in particlesToRemove:
+			particle.__del__
+			particles.remove(particle)
+
+		particlesToRemove = []
+		for particle in particles: 
 			particle.brownian()
 			particle.step()
 			if space.current_time_step % mutateInterval == 0:
 				particle.mutate()
 			if particle.check_division(): 	particlesToAdd.append(particle.divide())
 			if particle.check_remove(): 	particlesToRemove.append(particle)
+
 		for particle in particlesToRemove:
-			space.remove(particle.shape, particle.shape.body)
+			particle.__del__
 			particles.remove(particle)
 		particles.extend(particlesToAdd)
-		particlesToRemove = []
 		particlesToAdd = []
 
 		liquid = disperse_liquid(liquid)
-		liquid *= smellDegrade
+		liquid *= odorDegrade
 		np.clip(liquid, 0, 1)
 		space.step(1/50.0)
 		step += 1
 		if display:
-	 		clock.tick(50)
+			clock.tick(50)
 
 	inStr = select.select([sys.stdin,],[],[],0.0)[0] # check if input is pending
 	if inStr:
@@ -329,18 +424,22 @@ while running:
 			dim = (infoObject.current_w, infoObject.current_h)
 			screenOffX, screenOffY = infoObject.current_w / 2, infoObject.current_h / 2
 			screen = pygame.display.set_mode(dim)
-			pygame.display.toggle_fullscreen()
+# 			pygame.display.toggle_fullscreen()
 			clock = pygame.time.Clock()
 			follow = None
 			displaySmell = True
 			display = True
 			X, Y = 0, 0
 			Z = 1
+		elif inStr == "close" or inStr == "c":
+			pygame.display.quit()
+			pygame.quit()
+			display = False
 		elif inStr == "exit" or inStr == "e":
 			running = False
 	if display:
 		try:
-			pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
+			pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
 			screen.fill((0,0,0))
 			draw_lines(screen, lines)
 			if displaySmell:
