@@ -22,16 +22,20 @@ bX = (-2000, 2000)
 bY = (-2000, 2000)
 liquidGrain = 50
 nOdors = 3
+nInfo = 3
 dispersion = 1
 odorDegrade = 0.98
 brown = 5
 spawnSigma = 400
 foodInterval = 5
+mutateInterval = 100
+mutRange = 0.05
+foodOdor = np.array([0,0,0.5])
 
 # particle constants
-nInputs = 1 + nOdors + 1	# OUT: 	energy  N_odor  springs_attached
-nInternals = 5			# internal layers
-nOutputs = 2 + nOdors + 3	# IN:   division  elasticicty  N_odor  make_springs(break<-0.5..0.5<make)  bondLength  bondStiffness  bondDampening
+nInputs = 1 + nOdors + 1 + nInfo	# OUT: 	energy  N_odor  springs_attached N_bondInfo
+nInternals = 5				# internal layers
+nOutputs = 2 + nOdors + 3 + nInfo	# IN:   division  elasticicty  N_odor  bonding(break<-0.5..0.5<make)  bondLengthChange  attachment N_bondInfo
 inputLength  = nInputs + nInternals
 stateLength  = nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength =           nInternals + nOutputs
@@ -39,10 +43,13 @@ maxAge = 1000
 maxElasticity = 0.99
 maxBonds = 6
 minBondLength = 1
-maxBondLength = 20
-mutateInterval = 100
-mutRange = 0.05
-foodOdor = np.array([0,0,0.5])
+maxBondLength = 50
+bondChangeRate = 1
+bondInitLen = 10
+bondStiff = 10
+bondDamp = 10
+bondEnRate = 10
+minAttachment = 0.1
 
 # cost and rate constants
 massToEn = 100
@@ -65,14 +72,14 @@ liquidNx = int( (bX[1] - bX[0]) / liquidGrain )
 liquidNy = int( (bY[1] - bY[0]) / liquidGrain )
 
 class Particle(object):
-	def __del__(self):
-		for bond in self.bonds:
-			for cell in [bond.cellA, bond.cellB]:
-				if cell != self:
-					cell.remove_bond(bond)
-			self.remove_bond(bond)
-			space.remove(bond)
-		space.remove(self.shape, self.shape.body)
+# 	def __del__(self):
+# 		for bond in self.bonds:
+# 			for cell in [bond.cellA, bond.cellB]:
+# 				if cell != self:
+# 					cell.remove_bond(bond)
+# 			self.remove_bond(bond)
+# 			space.remove(bond)
+# 		space.remove(self.shape, self.shape.body)
 	def check_remove(self):
 		x = self.shape.body.position.x
 		y = self.shape.body.position.y
@@ -83,7 +90,8 @@ class Particle(object):
 	def brownian(self):	
 		impulse = (random.randint(-brown,brown), random.randint(-brown,brown) )
 		self.shape.body.apply_impulse_at_local_point(impulse)
-	def steal_energy(self, other, energy):
+	def transfer_energy(self, other, energy):
+		if energy < 0: self, other = other, self
 		demand = maxEn - self.energy
 		energy = min(energy, demand) # self can't remove more energy than it can swallow
 		supply = other.energy
@@ -103,6 +111,10 @@ class Particle(object):
 		return False
 	def mutate(self):
 		pass
+	def draw_body(self):
+		pass
+	def draw_bonds(self):
+		pass
 
 class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
@@ -119,15 +131,15 @@ class Food(Particle):
 		self.shape = shape
 		self.shape.Particle = self
 		self.shape.collision_type = 2
-	def draw(self):
+	def draw_body(self):
 		p = world_to_view(self.shape.body.position)
 		pygame.draw.circle(screen, (255,255,255), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
 		self.age += 1
 		self.energy -= rateExist
-		self._adjust_attributes()
+		self._adjust_body()
 		set_odor(self.shape.body.position, foodOdor) # OUT odor
-	def _adjust_attributes(self):
+	def _adjust_body(self):
 		mass = self.energy / massToEn
 		radius = radius_from_area(self.energy)
 		mass = max(1, mass)
@@ -155,10 +167,14 @@ class Cell(Particle):
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1
 			self.states = 		np.zeros((stateLength, 1))
 			self.color = 		np.random.rand(3)
-			self.bonding = 1
+			self.bonding = 0
 			self.bLength = 1
 			self.bStiff = 1
 			self.bDamp = 1
+			self.attachment = 1
+			self.bInfoRead = np.array([0,0,0])
+			self.bInfoWrite = np.array([0,0,0])
+			self.bEnTrans = 0
 		else:
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
@@ -169,26 +185,37 @@ class Cell(Particle):
 			self.bLength = 		parrent.bLength
 			self.bStiff = 		parrent.bStiff
 			self.bDamp = 		parrent.bDamp
+			self.attachment = 	parrent.attachment
+			self.bInfoRead =	parrent.bInfoRead 
+			self.bInfoWrite = 	parrent.bInfoWrite
+			self.bEnTrans = 	parrent.bEnTrans
 	def step(self):
 		self.age += 1
 		# energy handling
 		self.energy = min(maxEn, self.energy)
 		self.energy -= rateExist
-		self._adjust_attributes()
 		# regulatory network
+		## input
 		self.states[0,0] = self.energy / maxEn # IN energy
-		self.states[1:1+nOdors,0] = get_odor(self.shape.body.position) # IN odor
-		self.states[2+nOdors,0] = len(self.bonds) / (maxBonds*2)  - 1
+		self.states[1:4,0] = get_odor(self.shape.body.position) # IN odor
+		self.states[4,0] = len(self.bonds) / (maxBonds*2)  - 1
+		self.states[5:8,0] = self.bInfoRead
+		## nonlinearity
 		self.states[nInputs:,] = np.tanh( np.dot(self.weights, self.states[:nInputs+nInternals,]) + self.biases ) # drop input and internal states thrugh tanh non-liniearity and fill them into internal states and output 
 		np.clip(self.states, -1, 1) # clip to range -1..1
-		self.division = self.states[7,0] # OUT division
-		self.shape.elasticity = min(maxElasticity, self.states[8,0] + 1) # OUT elasticity
-		set_odor(self.shape.body.position, self.states[9:9+nOdors,0]) # OUT odor
-		self.bonding = self.states[10+nOdors,0]
-		self.bLength = self.states[11+nOdors,0]
-		self.bStiff = self.states[12+nOdors,0]
-		self.bDamp = self.states[13+nOdors,0]
-		self.adjust_bonds()
+		## output
+		self.division = self.states[8,0] # OUT division
+		self.odor = self.states[10:13,0]
+		self.shape.elasticity = min(maxElasticity, self.states[9,0] + 1) # OUT elasticity
+		self.bonding = self.states[13,0]
+		self.bLength = self.states[14,0]
+		self.attachment = self.states[15,0]
+		self.infoWrite = self.states[16:19,0]
+		self.bEnTrans = self.states[19,0]
+		# adjust body and bond attributes, deposit odor
+		self._adjust_body()
+		self._adjust_bonds()
+		set_odor(self.shape.body.position, self.odor)
 	def mutate(self):
 		i = random.randint(0, outputLength-1)
 		j = random.randint(0, inputLength-1)
@@ -204,55 +231,64 @@ class Cell(Particle):
 	def divide(self):
 		self.energy -= costDivide
 		self.energy /= 2
-		self._adjust_attributes()
+		self._adjust_body()
 		self.age = 0
 		x, y = self.shape.body.position
 		newCell = Cell(x, y, self.energy, self)
 		self.mutate()
 		newCell.mutate()
 		return newCell
-	def draw(self):
+	def draw_body(self):
 		p = world_to_view(self.shape.body.position)
 		color = (int(self.color[0]*255), int(self.color[1]*255), int(self.color[2]*255))
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
+	def draw_bonds(self):
 		for bond in self.bonds:
-			p1 = bond.cellA.shape.body.position
+			cellA = bond.cellA
+			cellB = bond.cellB
+			p1 = cellA.shape.body.position
+			p2 = cellB.shape.body.position
 			p2 = bond.cellB.shape.body.position
 			p1 = world_to_view(p1)
 			p2 = world_to_view(p2)
-			pygame.draw.lines(screen, (255,255,255), False, [p1,p2])
-	def _adjust_attributes(self):
+			bInfo = (cellA.bInfoWrite + cellB.bInfoWrite) / 2
+			red = 	int(min(1, max(0.3, bInfo[0]/2 + 0.5)) * 255)
+			blue = 	int(min(1, max(0.3, bInfo[1]/2 + 0.5)) * 255)
+			green = int(min(1, max(0.3, bInfo[2]/2 + 0.5)) * 255)
+			pygame.draw.lines(screen, (red,blue,green), False, [p1,p2])
+	def bond(self, other):
+		if self.bonding < 0.5 or other.bonding < 0.5: return
+		if len(self.bonds) >= maxBonds or len(other.bonds) >= maxBonds: return
+		length = bondInitLen + self.shape.radius + other.shape.radius # bond lengths are only between surfaces
+		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), bondInitLen, bondStiff, bondDamp)
+		space.add(spring)
+		self.bonds.append(spring)
+		other.bonds.append(spring)
+		spring.cellA = self
+		spring.cellB = other
+	def _adjust_body(self):
 		mass = self.energy / massToEn # mass
 		mass = max(1, mass)
 		self.shape.body.mass = mass
 		radius = radius_from_area(self.energy) # radius
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
-	def bond(self, other):
-		if self.bonding < 0.5 or other.bonding < 0.5: return
-		if len(self.bonds) >= maxBonds or len(other.bonds) >= maxBonds: return
-		length = abs((self.bLength + other.bLength) / 2 * 30 )
-		stiffness = abs((self.bStiff + other.bStiff) / 2 * 10 )
-		damping = abs((self.bDamp + other.bDamp) / 2 * 10 )
-		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), 30, 10, 10)
-		space.add(spring)
-		self.bonds.append(spring)
-		other.bonds.append(spring)
-		spring.cellA = self
-		spring.cellB = other
-	def adjust_bonds(self):
+		self.shape.body.velocity = self.shape.body.velocity * min(1, max(0, float(self.attachment)*0.5 + 1))
+	def _adjust_bonds(self):
 		bondsToRemove = []
 		for bond in self.bonds:
 			cellA = bond.cellA
 			cellB = bond.cellB
-			if cellA != self: cellA, cellB = cellB, cellA
-			if cellB.energy < 0 or cellA.bonding < 0.5:
+			if cellA == self: other = cellB
+			else: other = cellA
+			if other.energy < 0 or self.bonding < 0.5:
 				bondsToRemove.append(bond)
 				continue
-			bond.rest_length += abs(self.bLength) * 30
-			bond.rest_length = min(maxBondLength, max(minBondLength, bond.rest_length))
-			bond.stiffness += abs(self.bStiff) * 10
-			bond.damping += abs(self.bDamp) *10
+			bond.rest_length += self.bLength * bondChangeRate
+			bond.rest_length = min(maxBondLength + self.shape.radius + other.shape.radius, max(minBondLength, bond.rest_length + self.shape.radius + other.shape.radius))
+			other.bInfoRead += self.bInfoWrite
+			self.bInfoRead += other.bInfoRead
+			self.transfer_energy(other, self.bEnTrans * bondEnRate)
 		for bond in bondsToRemove:
 # 			space.remove(bond)
 			self.bonds.remove(bond)
@@ -287,7 +323,7 @@ def collision_cell_with_food(arbiter, space, data):
 	a,b = arbiter.shapes
 	cell = a.Particle
 	food = b.Particle
-	cell.steal_energy(food, rateTransfer)
+	cell.transfer_energy(food, -rateTransfer)
 def collision_cell_with_cell(arbiter, space, data):
 	a,b = arbiter.shapes
 	cellA = a.Particle
@@ -371,10 +407,13 @@ while running:
 				if isinstance(particle, Food): food += 1
 			if cells == 0: # reseed if necessary
 				step = 0
-				for i in range(50):
+				for i in range(100):
 					x = random.gauss(0, spawnSigma)	
 					y = random.gauss(0, spawnSigma)	
 					particles.append(Cell(x=x, y=y))
+					x = random.gauss(0, spawnSigma)	
+					y = random.gauss(0, spawnSigma)	
+					particles.append(Food(x=x, y=y))
 			print("\b"*100 + " "*100 + "\b"*100, end="", flush=True)
 			print("%8d\tcells:%5d\tfood:%5d" % (step, cells, food))
 		if step % foodInterval == 0: # spawn new food
@@ -386,7 +425,7 @@ while running:
 		for particle in particles:
 			if particle.check_remove(): particlesToRemove.append(particle)
 		for particle in particlesToRemove:
-			particle.__del__
+			space.remove(particle.shape.body, particle.shape)
 			particles.remove(particle)
 
 		particlesToRemove = []
@@ -399,7 +438,7 @@ while running:
 			if particle.check_remove(): 	particlesToRemove.append(particle)
 
 		for particle in particlesToRemove:
-			particle.__del__
+			space.remove(particle.shape.body, particle.shape)
 			particles.remove(particle)
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
@@ -438,67 +477,71 @@ while running:
 		elif inStr == "exit" or inStr == "e":
 			running = False
 	if display:
-		try:
-			pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
-			screen.fill((0,0,0))
-			draw_lines(screen, lines)
-			if displaySmell:
-				draw_liquid()
-			for particle in particles:
-				particle.draw()
-			if follow:
-				X, Y = - follow.shape.body.position
-				font = pygame.font.SysFont("monospace", 36)
-				string = "Energy: %4d  Age: %4d" % (follow.energy, follow.age)
-				text = font.render(string, 1, (255,255,255))
-				textpos = text.get_rect()
-				textpos.centerx = screen.get_rect().centerx
-				screen.blit(text, textpos)
-				if follow.check_remove(): follow = None
-			pygame.display.flip()
-			keys = pygame.key.get_pressed()
-			if keys[K_RIGHT]:
-				X -= 10
+		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
+		screen.fill((0,0,0))
+		draw_lines(screen, lines)
+		if displaySmell:
+			draw_liquid()
+		for particle in particles:
+			particle.draw_bonds()
+		for particle in particles:
+			particle.draw_body()
+		if follow:
+			X, Y = - follow.shape.body.position
+			font = pygame.font.SysFont("monospace", 26)
+			if isinstance(follow, Cell):
+				string = "E:%4d A:%4d Div:%05.2f Bd:%05.2f BL:%05.2f At:%05.2f El:%05.2f Od:%05.2f:%05.2f:%05.2f" % (follow.energy, follow.age, follow.division, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+			elif isinstance(follow, Food):
+				string = "E:%4d A:%4d" % (follow.energy, follow.age)
+			else: break
+			text = font.render(string, 1, (255,255,255))
+			textpos = text.get_rect()
+			textpos.centerx = screen.get_rect().centerx
+			screen.blit(text, textpos)
+			if follow.check_remove():
 				follow = None
-			if keys[K_LEFT]:
-				X += 10
-				follow = None
-			if keys[K_UP]:
-				Y += 10
-				follow = None
-			if keys[K_DOWN]:
-				Y -= 10
-				follow = None
-			if keys[K_PERIOD]:
-				Z += 0.01
-				Z = max(0, Z)
-				Z = min(10, Z)
-			if keys[K_COMMA]:
-				Z -= 0.01
-				Z = max(0, Z)
-				Z = min(10, Z)
-			for event in pygame.event.get():
-				if event.type == QUIT or event.type == KEYDOWN and event.key == K_ESCAPE:
-					pygame.display.quit()
-					pygame.quit()
-					display = False
-				if event.type == KEYDOWN and event.key == K_f:
-					pygame.display.toggle_fullscreen()
-				if event.type == KEYDOWN and event.key == K_SPACE:
-					pause = not pause
-				if event.type == KEYDOWN and event.key == K_d:
-					draw = not draw
-				if event.type == KEYDOWN and event.key == K_s:
-					displaySmell = not displaySmell
-				if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
-					mousePos = pygame.mouse.get_pos()
-					mousePos = view_to_world(mousePos)
-					point = space.point_query_nearest(mousePos, 0, pymunk.ShapeFilter())
-					if point:
-						follow = point.shape.Particle
-				if event.type == pygame.MOUSEBUTTONUP and event.button == 3: # right=3
-					mousePos = pygame.mouse.get_pos()
-					mousePos = view_to_world(mousePos)
-					particlesToAdd.append(Food(x=mousePos[0], y=mousePos[1]))
-		except:
-			display = False
+		pygame.display.flip()
+		keys = pygame.key.get_pressed()
+		if keys[K_RIGHT]:
+			X -= 10
+			follow = None
+		if keys[K_LEFT]:
+			X += 10
+			follow = None
+		if keys[K_UP]:
+			Y += 10
+			follow = None
+		if keys[K_DOWN]:
+			Y -= 10
+			follow = None
+		if keys[K_PERIOD]:
+			Z += 0.01
+			Z = max(0, Z)
+			Z = min(10, Z)
+		if keys[K_COMMA]:
+			Z -= 0.01
+			Z = max(0, Z)
+			Z = min(10, Z)
+		for event in pygame.event.get():
+			if event.type == QUIT or event.type == KEYDOWN and event.key == K_ESCAPE:
+				pygame.display.quit()
+				pygame.quit()
+				display = False
+			if event.type == KEYDOWN and event.key == K_f:
+				pygame.display.toggle_fullscreen()
+			if event.type == KEYDOWN and event.key == K_SPACE:
+				pause = not pause
+			if event.type == KEYDOWN and event.key == K_d:
+				draw = not draw
+			if event.type == KEYDOWN and event.key == K_s:
+				displaySmell = not displaySmell
+			if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
+				mousePos = pygame.mouse.get_pos()
+				mousePos = view_to_world(mousePos)
+				point = space.point_query_nearest(mousePos, 0, pymunk.ShapeFilter())
+				if point:
+					follow = point.shape.Particle
+			if event.type == pygame.MOUSEBUTTONUP and event.button == 3: # right=3
+				mousePos = pygame.mouse.get_pos()
+				mousePos = view_to_world(mousePos)
+				particlesToAdd.append(Food(x=mousePos[0], y=mousePos[1]))
