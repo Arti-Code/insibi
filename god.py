@@ -20,10 +20,12 @@ np.random.seed(1)
 # world constants
 bX = (-2000, 2000)
 bY = (-2000, 2000)
-liquidGrain = 50
-nOdors = 3
+solventGrain = 50
 odorDegrade = 0.98
-nLiquids = nOdors + 2
+enzymeDegrade = 0.9
+poisonDegrade = 0.99
+lightRate = 0.01
+nSolvents = 7 # odors 1-3, energy/enzyme/poison, light
 foodOdor = np.array([0,0,0.5])
 dispersion = 1
 brown = 5
@@ -33,10 +35,9 @@ mutateInterval = 100
 mutRange = 0.05
 
 # particle constants
-nInfo = 3
-nInputs = 1 + nOdors + 1 + nInfo	# OUT: 	energy  N_odor  springs_attached N_bondInfo
-nInternals = 10				# internal layers
-nOutputs = 2 + nOdors + 3 + nInfo + 1	# IN:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans
+nInputs = 12 		# OUT: 	energy  light 3solvutes odors1-3  springs_attached N_bondInfo
+nInternals = 10		# internal layers
+nOutputs = 12		# IN:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans
 inputLength  = nInputs + nInternals 
 stateLength  = nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength =           nInternals + nOutputs
@@ -61,7 +62,7 @@ rateTransfer = 50
 costTransfer = 1
 
 # for save function
-constants = {"bX":bX, "bY":bY, "liquidGrain":liquidGrain, "dispersion":dispersion, "odorDegrade": odorDegrade, "brown": brown,
+constants = {"bX":bX, "bY":bY, "solventGrain":solventGrain, "dispersion":dispersion, "odorDegrade": odorDegrade, "brown": brown,
 	"spawnSigma":spawnSigma, "foodInterval":foodInterval, "maxElasticity":maxElasticity, "stateLength":stateLength, 
 	"mutateInterval": mutateInterval, "mutRange":mutRange, "maxAge":maxAge, "massToEn":massToEn, "rateExist":rateExist,
 	"costDivide":costDivide, "rateTransfer":rateTransfer, "costTransfer":costTransfer}
@@ -69,8 +70,8 @@ constants = {"bX":bX, "bY":bY, "liquidGrain":liquidGrain, "dispersion":dispersio
 # derived constants
 wX = bX[1] - bX[0]
 wY = bY[1] - bY[0]
-liquidNx = int( (bX[1] - bX[0]) / liquidGrain )
-liquidNy = int( (bY[1] - bY[0]) / liquidGrain )
+solventNx = int( (bX[1] - bX[0]) / solventGrain )
+solventNy = int( (bY[1] - bY[0]) / solventGrain )
 
 class Particle(object):
 # 	def __del__(self):
@@ -196,9 +197,9 @@ class Cell(Particle):
 		# regulatory network
 		## input
 		self.states[0,0] 	= self.energy / maxEn 				# IN energy
-		self.states[1:4,0] 	= get_odor(self.shape.body.position)		# IN odor
-		self.states[4,0] 	= len(self.shape.body.constraints) / maxBonds	# IN number bonds
-		self.states[5:8,0] 	= self.bInfoRead				# IN information recieved over bonds
+		self.states[1:8,0] 	= get_solvent(self.shape.body.position)		# IN odor
+		self.states[8,0] 	= len(self.shape.body.constraints) / maxBonds	# IN number bonds
+		self.states[9:12,0] 	= self.bInfoRead				# IN information recieved over bonds
 		## nonlinearity
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states) + self.biases ) # nonlinearity
 		self.states 		= np.clip(self.states, -maxActivation, maxActivation) 	# clip activations 
@@ -328,60 +329,73 @@ def collision_cell_with_cell(arbiter, space, data):
 	cellB = b.Particle
 	if cellA.bonding < 0.75 or cellB.bonding < 0.75: return
 	cellA.bond(cellB)
-def disperse_liquid(liquid):
-	return cv2.blur(liquid, (3,3)) 
+def disperse_solvent(solvent):
+	return cv2.blur(solvent, (3,3)) 
 def set_odor(pos, odor):
 	x, y = pos
 	x = x + (bX[1] - bX[0]) / 2 # x with 0 at leftmost corner of world
-	i = int(x/liquidGrain)
+	i = int(x/solventGrain)
 	y = y + (bY[1] - bY[0]) / 2 # y with 0 at leftmost corner of world
-	j = int(y/liquidGrain)
-	liquid[i,j,:3] = odor
-def get_odor(pos):
+	j = int(y/solventGrain)
+	solvent[i,j,4:7] = odor
+def get_solvent(pos):
 	x, y = pos
 	x = x + wX / 2 # x with 0 at leftmost corner of world
-	i = int(x/liquidGrain)
+	i = int(x/solventGrain)
 	y = y + wY / 2 # y with 0 at leftmost corner of world
-	j = int(y/liquidGrain)
-	return liquid[i,j,:3]
-def draw_odor():
+	j = int(y/solventGrain)
+	return solvent[i,j,:]
+def draw_solvent(substance):
 	x1, y1 = view_to_world( (0, 0) ) # get points for rectangle of world coordinates displayed on screen
 	x2, y2 = view_to_world( (screenOffX*2,screenOffY*2) )
 	x1 = x1 + wX/2 # de-center world coordinates, so that top-right of map is 0,0
 	y1 = y1 + wY/2
 	x2 = x2 + wX/2
 	y2 = y2 + wY/2
-	i1 = max(0, min(liquidNx, int(x1/liquidGrain) )) # get indices for liquid
-	j1 = max(0, min(liquidNy, int(y1/liquidGrain) ))
-	i2 = max(0, min(liquidNx, int(x2/liquidGrain) ))
-	j2 = max(0, min(liquidNy, int(y2/liquidGrain) ))
+	i1 = max(0, min(solventNx, int(x1/solventGrain) )) # get indices for solvent
+	j1 = max(0, min(solventNy, int(y1/solventGrain) ))
+	i2 = max(0, min(solventNx, int(x2/solventGrain) ))
+	j2 = max(0, min(solventNy, int(y2/solventGrain) ))
 	recXwidth = int( (screenOffX*2) / (i2-i1) )
 	recYwidth = int( (screenOffY*2) / (j2-j1) )
 	for i in range(i1,i2):
 		for j in range(j1, j2):
-			odors = []
-			for k in range(nOdors):
-				odors.append(liquid[i,j,k])
-			color = (255*min(1, max(0, odors[0])), 255*min(1, max(0, odors[1])), 255*min(1, max(0, odors[2])))
+			if substance == "light":
+				light = solvent[i,j,0]
+				color = (255*light, 255*light, 255*light)
+			if substance == "solute":
+				energy = solvent[i,j,1]
+				enzyme = solvent[i,j,2]
+				poison = solvent[i,j,3]
+				color = (255*enzyme, 255*poison, 255*energy)
+			if substance == "odor":
+				odor1 = solvent[i,j,4]
+				odor2 = solvent[i,j,5]
+				odor3 = solvent[i,j,6]
+				color = (255*odor1, 255*odor2, 255*odor3)
 			x = int( (i-i1) * recXwidth )
 			y = int( (j-j1) * recYwidth )
 			pygame.draw.rect(screen, color, (x,y,recXwidth, recYwidth))
-def save(constants, step, liquid, particles, saveFile):
+def save(constants, step, solvent, particles, saveFile):
 	with open(saveFile, 'wb') as file:
 		pickle.dump(constants, file, protocol=pickle.HIGHEST_PROTOCOL)
 		pickle.dump(step, file, protocol=pickle.HIGHEST_PROTOCOL)
-		pickle.dump(liquid, file, protocol=pickle.HIGHEST_PROTOCOL)
+		pickle.dump(solvent, file, protocol=pickle.HIGHEST_PROTOCOL)
 		for particle in particles:
 			tmpShape = particle.shape
 			shapeVals = particle.deshape()
 			pickle.dump(particle, file, protocol=pickle.HIGHEST_PROTOCOL)
 			particle.shape = tmpShape
-		
+
+# global data structures
 space = pymunk.Space(threaded=True)
 space.threads = 2 # max number of threads
 space.iterations = 1 # minimum number of iterations for rough but fast collision detection
 lines = add_borders(space)
-liquid = np.zeros( (liquidNx, liquidNy, nLiquids) )
+solvent = np.zeros( (solventNx, solventNy, nSolvents) )
+solvent[:,:,0] = np.full( (solventNx, solventNy), 1.0)
+		
+# world behaviour
 particles = []
 hadler_CF = space.add_collision_handler(1, 2)
 hadler_CF.post_solve = collision_cell_with_food
@@ -399,7 +413,7 @@ while running:
 	if not pause:
 # 		if step % 100000 == 0 and step != 0: # save world
 # 			saveFile = "saves/%s_%s.god" % (datetime.date.today(), step)
-# 			save(constants, step, liquid, particles, saveFile)
+# 			save(constants, step, solvent, particles, saveFile)
 		if step % 1000 == 0: # check for living cells regulary
 			food, cells = 0, 0
 			for particle in particles:
@@ -446,9 +460,13 @@ while running:
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
 
-		liquid = disperse_liquid(liquid)
-		liquid *= odorDegrade
-		np.clip(liquid, 0, 1)
+		solvent = disperse_solvent(solvent)
+		solvent[:,:,0] 	+= lightRate
+		solvent[:,:,2] 	*= enzymeDegrade
+		solvent[:,:,3] 	*= poisonDegrade
+		solvent[:,:,4:7] *= odorDegrade
+		solvent = disperse_solvent(solvent)
+		solvent = np.clip(solvent, 0, 1)
 		space.step(1/50.0)
 		step += 1
 		if display:
@@ -468,9 +486,11 @@ while running:
 			screen = pygame.display.set_mode(dim)
 # 			pygame.display.toggle_fullscreen()
 			clock = pygame.time.Clock()
-			follow = None
-			displayOdor = False
 			display = True
+			displayLight = False
+			displaySolute = False
+			displayOdor = False
+			follow = None
 			X, Y = 0, 0
 			Z = 1
 		elif inStr == "close" or inStr == "c":
@@ -483,8 +503,12 @@ while running:
 		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\t%d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
 		screen.fill((0,0,0))
 		draw_lines(screen, lines)
+		if displayLight:
+			draw_solvent("light")
+		if displaySolute:
+			draw_solvent("solute")
 		if displayOdor:
-			draw_odor()
+			draw_solvent("odor")
 		for particle in particles:
 			particle.draw_bonds()
 		for particle in particles:
@@ -536,9 +560,13 @@ while running:
 				pause = not pause
 			if event.type == KEYDOWN and event.key == K_d:
 				draw = not draw
+			if event.type == KEYDOWN and event.key == K_l:
+				displayLight = not displayLight
+			if event.type == KEYDOWN and event.key == K_s:
+				displaySolute = not displaySolute
 			if event.type == KEYDOWN and event.key == K_o:
 				displayOdor = not displayOdor
-			if event.type == KEYDOWN and event.key == K_s:
+			if event.type == KEYDOWN and event.key == K_r:
 				seed = True
 			if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
 				mousePos = pygame.mouse.get_pos()
