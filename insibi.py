@@ -34,7 +34,7 @@ mutateInterval 	= 100
 mutRange 	= 0.05
 
 # particle constants
-divisionTime 	= 10
+divisionTime 	= 100
 maxAge 		= 999
 maxElasticity 	= 0.99
 minAttachment 	= 0.01
@@ -45,11 +45,12 @@ bondStiff 	= 100
 bondDamp 	= 10
 bondRatio 	= 20
 bondEnRate 	= 10
+bondSolRate 	= 0.1
 ## genetics
 maxActivation 	= 1
-nInputs 	= 12 		# OUT: 	energy  light 3solvutes odors1-3  springs_attached N_bondInfo
+nInputs 	= 12 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3
 nInternals 	= 10		# internal layers
-nOutputs 	= 13		# IN:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans growChlorophyl
+nOutputs 	= 19		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondPoisonTrans growChlorophyl solutes1-3 odors1-3
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
@@ -63,7 +64,7 @@ enToPoison 	= 0.0001
 costDivide 	= 100
 rateTransfer 	= 50
 costTransfer 	= 1
-ratePoison 	= 10
+ratePoison 	= 1
 rateChlorophyl	= 1
 rateAutotrophy	= 0.00008
 
@@ -94,6 +95,10 @@ class Particle(object):
 		other.energy -= energy
 		self.energy += energy
 		self.energy -= costTransfer
+	def transfer_solutes(self, other, transfer):
+		transfer = np.clip(transfer, 0, other.solvent[1:]) # clip to maximal the solvent concentration at the other cell
+		self.solvent[1:] -= transfer
+		other.solvent[1:] += transfer
 	def remove_bond(self, delBond):
 		removeBond = None
 		for bond in self.bonds:
@@ -144,9 +149,10 @@ class Food(Particle):
 		self.shape.body.mass = mass
 
 class Cell(Particle):
-	def __init__(self, x=0, y=0, energy=1000, parrent=None):
+	def __init__(self, x=0, y=0, energy=1000, chlorophyl = 1000, parrent=None):
 		self.age = 0
 		self.energy = energy
+		self.chlorophyl = chlorophyl
 		mass = max(1, self.energy / massToEn)
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
@@ -157,6 +163,7 @@ class Cell(Particle):
 		self.shape = shape
 		self.shape.Particle = self
 		self.shape.collision_type = 1
+		self.solvent = get_solvent(self.shape.body.position)
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
 			self.weights = 		np.random.rand(outputLength, stateLength) * 2 - 1
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
@@ -170,7 +177,7 @@ class Cell(Particle):
 			self.bInfoRead = 	np.array([0.0,0.0,0.0])
 			self.bInfoWrite = 	np.array([0.0,0.0,0.0])
 			self.bEnTrans = 	0
-			self.chlorophyl = 	100
+			self.bPoisonTrans =	0
 		else: 			# copy genes and interaction values
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
@@ -185,21 +192,21 @@ class Cell(Particle):
 			self.bInfoRead =	parrent.bInfoRead 
 			self.bInfoWrite = 	parrent.bInfoWrite
 			self.bEnTrans = 	parrent.bEnTrans
-			self.chlorophyl = 	parrent.chlorophyl
+			self.bPoisonTrans =	parrent.bPoisonTrans
 	def step(self):
 		# initial checkups
-		solvent = get_solvent(self.shape.body.position)
-		light = solvent[0]
+		self.solvent = get_solvent(self.shape.body.position)
+		light = self.solvent[0]
 		light = max(0, min(light, self.chlorophyl * rateAutotrophy))
-		solvent[0] -= light
+		self.solvent[0] -= light
 		self.energy += lightToEn * light
 		self.energy -= rateExist
-		self.energy -= ratePoison * solvent[3]
+		self.energy -= ratePoison * self.solvent[3]
 		self.energy = min(maxEn, self.energy)
 		# regulatory network
 		## input
 		self.states[0,0] 	= self.energy / maxEn 				# IN energy
-		self.states[1:8,0] 	= solvent					# IN light, energy, enzyme, poison, odor1-3
+		self.states[1:8,0] 	= self.solvent					# IN light, free energy, enzyme, poison, odor1-3
 		self.states[8,0] 	= len(self.shape.body.constraints) / maxBonds	# IN number bonds
 		self.states[9:12,0] 	= self.bInfoRead				# IN information recieved over bonds
 		## nonlinearity
@@ -214,18 +221,19 @@ class Cell(Particle):
 		self.bonding 		= self.outputs[5,0]				# OUT bonding propensity
 		self.bLength 		= self.outputs[6,0]				# OUT bond length
 		self.attachment 	= self.outputs[7,0]				# OUT attachment to surface
-		self.bInfoWrite		= self.outputs[8:11,0]				# OUT information sent over bonds
-		self.bEnTrans 		= self.outputs[11,0]				# OUT energy sent over bonds
-		growChlorophyl 		= self.outputs[12,0]				# OUT energy sent over bonds
+		growChlorophyl 		= self.outputs[8,0]				# OUT clorophyl growing
+		self.bInfoWrite		= self.outputs[9:12,0]				# OUT information sent over bonds
+		self.bEnTrans 		= self.outputs[12,0]				# OUT energy sent over bonds
+		self.bSolTrans 		= self.outputs[13:19,0]				# OUT solvent and odor transferred over bonds
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
 		self._adjust_bonds()
-		solvent[3] += enToPoison * self.energy
-		solvent[4:7] += self.odor
 		self.bInfoRead.fill(0) # reset bond info buffer
 		self.chlorophyl += growChlorophyl
 		self.energy -= rateChlorophyl * growChlorophyl
+		self.solvent[3] += enToPoison * self.energy
+		self.solvent[4:7] += self.odor
 	def mutate(self):
 		# weights
 		i = random.randint(0, outputLength-1)
@@ -248,7 +256,7 @@ class Cell(Particle):
 		self._adjust_body()
 		self.age = 0
 		x, y = self.shape.body.position
-		newCell = Cell(x, y, self.energy, self)
+		newCell = Cell(x, y, energy=self.energy, chlorophyl=self.chlorophyl, parrent=self)
 		self.mutate()
 		newCell.mutate()
 		self.bond(newCell)
@@ -272,7 +280,7 @@ class Cell(Particle):
 			pygame.draw.line(screen, (red,blue,green), p1, p2, 2)
 	def bond(self, other):
 		if len(self.shape.body.constraints) >= maxBonds or len(other.shape.body.constraints) >= maxBonds: return
-		length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces
+		length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), length, bondStiff, bondDamp)
 		space.add(spring)
 		spring.cellA = self
@@ -297,10 +305,13 @@ class Cell(Particle):
 			else: other = cellA
 			if self.age > divisionTime and (other.energy < 0 or self.bonding < 0.25):
 				space.remove(bond)
-			bond.rest_length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces
+			bond.rest_length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 			other.bInfoRead += self.bInfoWrite
 			self.bInfoRead += other.bInfoRead
 			self.transfer_energy(other, self.bEnTrans * bondEnRate)
+			self.transfer_solutes(other, self.bSolTrans * bondSolRate)
+			
+			
 			
 def radius_from_area(area):
 	if area <= 0: return 0
