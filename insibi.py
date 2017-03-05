@@ -22,15 +22,17 @@ bX 		= (-2000, 2000)
 bY 		= (-2000, 2000)
 solventGrain 	= 50
 lightRate 	= 1
+sunW		= 2
+sunH		= 2
 odorDegrade 	= 0.98
 enzymeDegrade 	= 0.9
-poisonDegrade 	= 0.99
-nSolvents 	= 7 # odors 1-3, energy/enzyme/poison, light
+wasteDegrade 	= 0.99
+nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 foodOdor 	= np.array([0,0,0.5])
 brown 		= 5
 spawnSigma 	= 500
 foodInterval 	= 99999999
-mutateInterval 	= 100
+mutateInterval 	= 1
 mutRange 	= 0.05
 
 # particle constants
@@ -39,6 +41,9 @@ maxAge 		= 999
 maxElasticity 	= 0.99
 minAttachment 	= 0.01
 maxAttachment 	= 0.5
+maxChlorophyl	= 1000
+maxEnzyme	= 1000
+maxTransporter	= 1000
 ## bonds
 maxBonds 	= 6
 bondStiff 	= 100
@@ -48,9 +53,9 @@ bondEnRate 	= 10
 bondSolRate 	= 0.1
 ## genetics
 maxActivation 	= 1
-nInputs 	= 12 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3
+nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
 nInternals 	= 10		# internal layers
-nOutputs 	= 19		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondPoisonTrans growChlorophyl solutes1-3 odors1-3
+nOutputs 	= 21		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
@@ -60,20 +65,29 @@ maxEn 		= 3000
 massToEn 	= 100
 lightToEn	= 100
 rateExist 	= 0.3
-enToPoison 	= 0.0001
+enToWaste 	= 0.0001
+nutrientToEn	= 100
 costDivide 	= 100
 rateTransfer 	= 50
 costTransfer 	= 1
-ratePoison 	= 1
+rateWaste 	= 1
 rateChlorophyl	= 1
 rateAutotrophy	= 0.00008
+rateEnzyme	= 1
+rateHeterotrophy = 0.1
+rateTransporter = 1
+rateExpression 	= 1
+
 
 # derived constants
 wX = bX[1] - bX[0]
 wY = bY[1] - bY[0]
 solventNx = int( (bX[1] - bX[0]) / solventGrain )
 solventNy = int( (bY[1] - bY[0]) / solventGrain )
-# sun = (solventNx//2, solventNy//2, 0) # sun is shining at the center of the world
+sunX1 = solventNx // 2 - sunW
+sunX2 = solventNx // 2 + sunW
+sunY1 = solventNx // 2 - sunH
+sunY2 = solventNx // 2 + sunH
 
 class Particle(object):
 	def check_remove(self):
@@ -149,10 +163,12 @@ class Food(Particle):
 		self.shape.body.mass = mass
 
 class Cell(Particle):
-	def __init__(self, x=0, y=0, energy=1000, chlorophyl = 1000, parrent=None):
+	def __init__(self, x=0, y=0, parrent=None):
+		if parrent is None: 	# energy is needed for the following 
+			self.energy = 		1000
+		else:
+			self.energy = 		parrent.energy	
 		self.age = 0
-		self.energy = energy
-		self.chlorophyl = chlorophyl
 		mass = max(1, self.energy / massToEn)
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
@@ -165,11 +181,15 @@ class Cell(Particle):
 		self.shape.collision_type = 1
 		self.solvent = get_solvent(self.shape.body.position)
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
+			self.chlorophyl = 	1000
+			self.enzyme = 		0
+			self.transporter = 	1000
 			self.weights = 		np.random.rand(outputLength, stateLength) * 2 - 1
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
 			self.states = 		np.zeros((stateLength, 1))
 			self.outputs = 		np.zeros((outputLength,1))
 			self.color = 		np.random.rand(3)
+			self.odor = 		np.zeros(3)
 			self.bonding = 		1
 			self.bLength = 		1
 			self.bStiff = 		1
@@ -177,38 +197,59 @@ class Cell(Particle):
 			self.bInfoRead = 	np.array([0.0,0.0,0.0])
 			self.bInfoWrite = 	np.array([0.0,0.0,0.0])
 			self.bEnTrans = 	0
-			self.bPoisonTrans =	0
+			self.bSolTrans = 	np.zeros(6)
 		else: 			# copy genes and interaction values
+			self.energy = 		parrent.energy	
+			self.chlorophyl = 	parrent.chlorophyl	
+			self.enzyme = 		parrent.enzyme
+			self.transporter =	parrent.transporter	
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
 			self.biases = 		np.copy(parrent.biases)
 			self.states = 		np.copy(parrent.states)
 			self.outputs = 		np.copy(parrent.outputs)
 			self.color = 		np.copy(parrent.color)
+			self.odor = 		np.copy(parrent.odor)
 			self.bonding = 		parrent.bonding
 			self.bLength = 		parrent.bLength
 			self.bStiff = 		parrent.bStiff
 			self.bDamp = 		parrent.bDamp
-			self.bInfoRead =	parrent.bInfoRead 
-			self.bInfoWrite = 	parrent.bInfoWrite
+			self.bInfoRead =	np.copy(parrent.bInfoRead)
+			self.bInfoWrite = 	np.copy(parrent.bInfoWrite)
 			self.bEnTrans = 	parrent.bEnTrans
-			self.bPoisonTrans =	parrent.bPoisonTrans
+			self.bSolTrans = 	np.copy(parrent.bSolTrans)
 	def step(self):
 		# initial checkups
 		self.solvent = get_solvent(self.shape.body.position)
+		## autophagy
 		light = self.solvent[0]
 		light = max(0, min(light, self.chlorophyl * rateAutotrophy))
 		self.solvent[0] -= light
 		self.energy += lightToEn * light
+		## heterotrophy
+		nutrient = self.solvent[1]
+		nutrient = max(0, min(nutrient, self.transporter + rateHeterotrophy))
+		self.solvent[1] -= nutrient
+		self.energy += nutrientToEn * nutrient
+		self.solvent[2] += max(0, min(1, self.enzyme * rateExpression))
+		## general costs and solvent depositions
 		self.energy -= rateExist
-		self.energy -= ratePoison * self.solvent[3]
+		lostEnergy = min(self.energy, rateEnzyme * self.solvent[2]) # cell could expell more nutrients than possible without min()
+		self.energy -= lostEnergy
+		self.solvent[1] += lostEnergy / nutrientToEn # add nutrient to solvent
+		self.energy -= rateWaste * self.solvent[3]
 		self.energy = min(maxEn, self.energy)
+		self.solvent[3] += enToWaste * self.energy
+		self.solvent[4:7] += self.odor
 		# regulatory network
 		## input
 		self.states[0,0] 	= self.energy / maxEn 				# IN energy
-		self.states[1:8,0] 	= self.solvent					# IN light, free energy, enzyme, poison, odor1-3
+		self.states[1:8,0] 	= self.solvent					# IN light, free energy, enzyme, waste, odor1-3
 		self.states[8,0] 	= len(self.shape.body.constraints) / maxBonds	# IN number bonds
 		self.states[9:12,0] 	= self.bInfoRead				# IN information recieved over bonds
+		self.states[12,0] 	= self.chlorophyl / maxChlorophyl 		# IN chlorophyl
+		self.states[13,0] 	= self.enzyme / maxEnzyme			# IN enzyme
+		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
 		## nonlinearity
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states) + self.biases ) # nonlinearity
 		self.states 		= np.clip(self.states, -maxActivation, maxActivation) 	# clip activations 
@@ -222,18 +263,25 @@ class Cell(Particle):
 		self.bLength 		= self.outputs[6,0]				# OUT bond length
 		self.attachment 	= self.outputs[7,0]				# OUT attachment to surface
 		growChlorophyl 		= self.outputs[8,0]				# OUT clorophyl growing
-		self.bInfoWrite		= self.outputs[9:12,0]				# OUT information sent over bonds
-		self.bEnTrans 		= self.outputs[12,0]				# OUT energy sent over bonds
-		self.bSolTrans 		= self.outputs[13:19,0]				# OUT solvent and odor transferred over bonds
+		growEnzyme 		= self.outputs[9,0]				# OUT clorophyl growing
+		growTransporter 	= self.outputs[10,0]				# OUT clorophyl growing
+		self.bInfoWrite		= self.outputs[11:14,0]				# OUT information sent over bonds
+		self.bEnTrans 		= self.outputs[14,0]				# OUT energy sent over bonds
+		self.bSolTrans 		= self.outputs[15:21,0]				# OUT solvent and odor transferred over bonds
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
 		self._adjust_bonds()
 		self.bInfoRead.fill(0) # reset bond info buffer
-		self.chlorophyl += growChlorophyl
-		self.energy -= rateChlorophyl * growChlorophyl
-		self.solvent[3] += enToPoison * self.energy
-		self.solvent[4:7] += self.odor
+		if self.chlorophyl < maxChlorophyl:
+			self.chlorophyl += growChlorophyl
+			self.energy -= rateChlorophyl * growChlorophyl
+		if self.enzyme < maxEnzyme:
+			self.enzyme += growEnzyme
+			self.energy -= rateEnzyme * growEnzyme
+		if self.transporter < maxTransporter:
+			self.transporter += growTransporter
+			self.energy -= rateTransporter * growTransporter
 	def mutate(self):
 		# weights
 		i = random.randint(0, outputLength-1)
@@ -253,10 +301,12 @@ class Cell(Particle):
 		self.energy -= costDivide
 		self.energy /= 2
 		self.chlorophyl /= 2
+		self.enzyme /= 2
+		self.transporter /= 2
 		self._adjust_body()
 		self.age = 0
 		x, y = self.shape.body.position
-		newCell = Cell(x, y, energy=self.energy, chlorophyl=self.chlorophyl, parrent=self)
+		newCell = Cell(x, y, self)
 		self.mutate()
 		newCell.mutate()
 		self.bond(newCell)
@@ -359,7 +409,10 @@ def get_solvent(pos):
 	y = y + wY / 2 # y with 0 at leftmost corner of world
 	j = int(y/solventGrain)
 	return solvent[i,j,:]
-def draw_solvent(substance):
+def draw_solvent(light=False, solute=False, odor=False):
+	drawN = int(light) + int(solute) + int(odor)
+	if drawN == 0: return
+	color = np.zeros(3)
 	x1, y1 = view_to_world( (0, 0) ) # get points for rectangle of world coordinates displayed on screen
 	x2, y2 = view_to_world( (screenOffX*2,screenOffY*2) )
 	x1 = x1 + wX/2 # de-center world coordinates, so that top-right of map is 0,0
@@ -374,19 +427,24 @@ def draw_solvent(substance):
 	recYwidth = int( (screenOffY*2) / (j2-j1) )
 	for i in range(i1,i2):
 		for j in range(j1, j2):
-			if substance == "light":
+			color.fill(0)
+			if light:
 				light = solvent[i,j,0]
-				color = (255*light, 255*light, 255*light)
-			if substance == "solute":
-				energy = solvent[i,j,1]
+				color += (255*light)/drawN
+			if solute:
+				nutrient = solvent[i,j,1]
 				enzyme = solvent[i,j,2]
-				poison = solvent[i,j,3]
-				color = (255*enzyme, 255*poison, 255*energy)
-			if substance == "odor":
+				waste = solvent[i,j,3]
+				color[0] += (255*enzyme)/drawN
+				color[1] += (255*waste)/drawN
+				color[2] += (255*nutrient)/drawN
+			if odor:
 				odor1 = solvent[i,j,4]
 				odor2 = solvent[i,j,5]
 				odor3 = solvent[i,j,6]
-				color = (255*odor1, 255*odor2, 255*odor3)
+				color[0] += (255*odor1)/drawN
+				color[1] += (255*odor2)/drawN
+				color[2] += (255*odor3)/drawN
 			x = int( (i-i1) * recXwidth )
 			y = int( (j-j1) * recYwidth )
 			pygame.draw.rect(screen, color, (x,y,recXwidth, recYwidth))
@@ -420,12 +478,10 @@ while running:
 			cells = 0
 			for particle in particles:
 				if isinstance(particle, Cell): cells += 1
-			if cells == 0: # reseed if necessary
-				seed = True
 			print("\b"*100 + " "*100 + "\b"*100, end="", flush=True)
-			print("%8d\tcells:%5d" % (step, cells))
+			print("step:%8d\tcells:%5d" % (step, cells))
 
-		if seed:
+		if len(particles) == 0 or seed:
 			seed = False
 			step = 0
 			for i in range(100):
@@ -462,9 +518,9 @@ while running:
 		particlesToAdd = []
 
 		solvent = disperse_solvent(solvent)
-		solvent[solventNx//2-2 : solventNx//2+2 , solventNy//2-2 : solventNy//2+2, 0] 	+= lightRate
+		solvent[sunX1:sunX2, sunY1:sunY2, 0] += lightRate
 		solvent[:,:,2] 	*= enzymeDegrade
-		solvent[:,:,3] 	*= poisonDegrade
+		solvent[:,:,3] 	*= wasteDegrade
 		solvent[:,:,4:7] *= odorDegrade
 		solvent = disperse_solvent(solvent)
 		solvent = np.clip(solvent, 0, 1)
@@ -506,12 +562,7 @@ while running:
 		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\tCells:%3d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
 		screen.fill((0,0,0))
 		draw_lines(screen, lines)
-		if displayLight:
-			draw_solvent("light")
-		if displaySolute:
-			draw_solvent("solute")
-		if displayOdor:
-			draw_solvent("odor")
+		draw_solvent(displayLight, displaySolute, displayOdor)
 		for particle in particles:
 			particle.draw_bonds()
 		for particle in particles:
@@ -520,7 +571,7 @@ while running:
 			X, Y = - follow.shape.body.position
 			font = pygame.font.SysFont("monospace", 26)
 			if isinstance(follow, Cell):
-				string = "E:%4d A:%4d Div:%3.2f Chl:%3.2f Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
 			elif isinstance(follow, Food):
 				string = "E:%4d A:%4d" % (follow.energy, follow.age)
 			else: break
