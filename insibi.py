@@ -49,8 +49,8 @@ maxEnzyme	= 1000
 maxTransporter	= 1000
 ## bonds
 maxBonds 	= 6
-bondStiff 	= 100
-bondDamp 	= 10
+bondStiff 	= 1000
+bondDamp 	= 1000
 bondRatio 	= 20
 bondEnRate 	= 10
 bondSolRate 	= 0.1
@@ -65,18 +65,18 @@ outputLength 	=           nInternals + nOutputs
 
 # cost and rate constants
 maxEn 		= 3000
-costExist 	= 0.3
+costExist 	= 0.5
 costWaste 	= 1
 costDivide 	= 100
 rateTransfer 	= 50
 costTransfer 	= 1
 ## conversions
 massToEn 	= 100
-lightToEn	= 10
+lightToEn	= 100
 nutrientToEn	= 100
 enToWaste 	= 0.0001
 ## costs for cytosol components
-rateChlorophyl	= 0.00001
+rateChlorophyl	= 0.0000001
 rateEnzyme	= 0.00001
 rateTransporter = 0.00001
 ## effectiveness of cytosol components
@@ -385,6 +385,11 @@ class Cell(Particle):
 			cellB = bond.cellB
 			if cellA == self: other = cellB
 			else: other = cellA
+			if other.check_remove(): # if other cell is dead, ignore bond and delete it
+				bond.cellA = None # unset references to the dead cell, otherwhise the dead cell will point to the bond and the bond
+				bond.cellB = None #  to the cell, making it impossible to remove either
+				space.remove(bond)
+				continue
 			if self.age > divisionTime and (other.energy < 0 or self.bonding < 0.25):
 				space.remove(bond)
 			bond.rest_length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
@@ -505,7 +510,6 @@ food = False
 step = 0
 
 while running:
-# 	print(len(particles), len(space._get_constraints()))
 	if not pause:
 		if step % 1000 == 0: # check for living cells regulary
 			cells = 0
@@ -604,9 +608,9 @@ while running:
 				particle.draw_cytosol()
 		if follow:
 			X, Y = - follow.shape.body.position
-			font = pygame.font.SysFont("monospace", 26)
+			font = pygame.font.SysFont("monospace", 20)
 			if isinstance(follow, Cell):
-				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f ABL:%3.2f ABL2:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, list(follow.shape.body.constraints)[0].rest_length, list(list(follow.shape.body.constraints)[0].cellA.shape.body.constraints)[0].rest_length, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
 			elif isinstance(follow, Food):
 				string = "E:%4d A:%4d" % (follow.energy, follow.age)
 			else: break
