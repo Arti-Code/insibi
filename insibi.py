@@ -30,10 +30,13 @@ wasteDegrade 	= 0.99
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 foodOdor 	= np.array([0,0,0.5])
 brown 		= 5
-spawnSigma 	= 500
+spawnSigma 	= 200
 foodInterval 	= 99999999
 mutateInterval 	= 1
 mutRange 	= 0.05
+
+# display constants
+shellThickness = 4
 
 # particle constants
 divisionTime 	= 100
@@ -55,28 +58,31 @@ bondSolRate 	= 0.1
 maxActivation 	= 1
 nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
 nInternals 	= 10		# internal layers
-nOutputs 	= 21		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter
+nOutputs 	= 22		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
 
 # cost and rate constants
 maxEn 		= 3000
-massToEn 	= 100
-lightToEn	= 100
-rateExist 	= 0.3
-enToWaste 	= 0.0001
-nutrientToEn	= 100
+costExist 	= 0.3
+costWaste 	= 1
 costDivide 	= 100
 rateTransfer 	= 50
 costTransfer 	= 1
-rateWaste 	= 1
-rateChlorophyl	= 1
-rateAutotrophy	= 0.00008
-rateEnzyme	= 1
-rateHeterotrophy = 0.1
-rateTransporter = 1
-rateExpression 	= 1
+## conversions
+massToEn 	= 100
+lightToEn	= 10
+nutrientToEn	= 100
+enToWaste 	= 0.0001
+## costs for cytosol components
+rateChlorophyl	= 0.00001
+rateEnzyme	= 0.00001
+rateTransporter = 0.00001
+## effectiveness of cytosol components
+rateHeterotrophy = 0.001
+rateAutotrophy	= 0.001
+rateExpression 	= 0.001
 
 
 # derived constants
@@ -113,11 +119,26 @@ class Particle(object):
 		transfer = np.clip(transfer, 0, other.solvent[1:]) # clip to maximal the solvent concentration at the other cell
 		self.solvent[1:] -= transfer
 		other.solvent[1:] += transfer
-	def remove_bond(self, delBond):
-		removeBond = None
-		for bond in self.bonds:
-			if bond == delBond: removeBond = delBond
-		self.bonds.remove(delBond)
+	def remove_bonds(self):
+		for bond in self.shape.body.constraints:
+			cellA = bond.cellA
+			cellB = bond.cellB
+# 			print(bond)
+# 			print(len(cellA.shape.body.constraints))
+# 			print(type(cellA.shape.body.constraints))
+# 			print(cellA.shape.body.constraints)
+# 			print(len(cellB.shape.body.constraints))
+# 			print(cellB.shape.body.constraints)
+# 			a = cellA.shape.body.constraints.copy()
+# 			a.remove(bond)
+# 			cellA.shape.body.constraints = a
+# 			space.remove(bond)
+# 			cellB.shape.body.constraints.remove(bond)
+# 			print(len(cellA.shape.body.constraints))
+# 			print(cellA.shape.body.constraints)
+# 			print(len(cellB.shape.body.constraints))
+# 			print(cellB.shape.body.constraints)
+# 			print()
 	def deshape(self):
 		self.shape = None
 		return None # expand to save shape parameters not allready encoded with energy and states
@@ -134,7 +155,6 @@ class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
 		self.age = 0
 		self.energy = energy
-		self.bonds = []
 		mass = self.energy / massToEn
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
@@ -150,7 +170,7 @@ class Food(Particle):
 		pygame.draw.circle(screen, (255,255,255), p, max(2, int(self.shape.radius * Z)), 2)
 	def step(self):
 		self.age += 1
-		self.energy -= rateExist
+		self.energy -= costExist
 		self._adjust_body()
 		solvent = get_solvent(self.shape.body.position)
 		solvent[4:7] = foodOdor
@@ -170,6 +190,7 @@ class Cell(Particle):
 			self.energy = 		parrent.energy	
 		self.age = 0
 		mass = max(1, self.energy / massToEn)
+		self.mass = self.energy / maxEn
 		radius = max(1, radius_from_area(self.energy))
 		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
 		body = pymunk.Body(mass, inertia)
@@ -183,6 +204,7 @@ class Cell(Particle):
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
 			self.chlorophyl = 	1000
 			self.enzyme = 		0
+			self.enzymeExp = 	0
 			self.transporter = 	1000
 			self.weights = 		np.random.rand(outputLength, stateLength) * 2 - 1
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
@@ -202,6 +224,7 @@ class Cell(Particle):
 			self.energy = 		parrent.energy	
 			self.chlorophyl = 	parrent.chlorophyl	
 			self.enzyme = 		parrent.enzyme
+			self.enzymeExp = 	parrent.enzymeExp
 			self.transporter =	parrent.transporter	
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
@@ -221,24 +244,33 @@ class Cell(Particle):
 	def step(self):
 		# initial checkups
 		self.solvent = get_solvent(self.shape.body.position)
-		## autophagy
+		self.mass = self.energy / maxEn
 		light = self.solvent[0]
-		light = max(0, min(light, self.chlorophyl * rateAutotrophy))
-		self.solvent[0] -= light
-		self.energy += lightToEn * light
-		## heterotrophy
 		nutrient = self.solvent[1]
-		nutrient = max(0, min(nutrient, self.transporter + rateHeterotrophy))
-		self.solvent[1] -= nutrient
-		self.energy += nutrientToEn * nutrient
-		self.solvent[2] += max(0, min(1, self.enzyme * rateExpression))
+		enzyme = self.solvent[2]
+		waste = self.solvent[3]
+		## autophagy
+		harvestedLight = max(0, min(1, light * self.chlorophyl * rateAutotrophy))# / self.mass)
+		self.solvent[0] -= harvestedLight
+		self.energy += lightToEn * harvestedLight
+		self.energy -= rateChlorophyl * self.chlorophyl
+		## heterotrophy
+		harvestedNutrient = max(0, min(1, nutrient * self.transporter * rateHeterotrophy))# / self.mass)
+		self.solvent[1] -= harvestedNutrient
+		self.energy += nutrientToEn * harvestedNutrient
+		self.energy -= rateTransporter * self.transporter
+		## enzyme expression
+		producedEnzyme = max(0, min(1, self.enzyme * rateExpression * self.enzymeExp))# / self.mass)
+		self.solvent[2] += producedEnzyme
+		self.energy -= rateEnzyme * self.enzyme
 		## general costs and solvent depositions
-		self.energy -= rateExist
-		lostEnergy = min(self.energy, rateEnzyme * self.solvent[2]) # cell could expell more nutrients than possible without min()
+		self.energy -= costExist
+		self.energy = max(0, min(self.energy, maxEn))
+		self.energy -=  costWaste * self.mass * self.solvent[3]
+		lostEnergy = min(self.energy, enzyme * rateEnzyme) # cell could expell more nutrients than possible without min()
 		self.energy -= lostEnergy
-		self.solvent[1] += lostEnergy / nutrientToEn # add nutrient to solvent
-		self.energy -= rateWaste * self.solvent[3]
-		self.energy = min(maxEn, self.energy)
+		lostNutrient = lostEnergy / nutrientToEn
+		self.solvent[1] += lostNutrient # add nutrient to solvent
 		self.solvent[3] += enToWaste * self.energy
 		self.solvent[4:7] += self.odor
 		# regulatory network
@@ -268,6 +300,7 @@ class Cell(Particle):
 		self.bInfoWrite		= self.outputs[11:14,0]				# OUT information sent over bonds
 		self.bEnTrans 		= self.outputs[14,0]				# OUT energy sent over bonds
 		self.bSolTrans 		= self.outputs[15:21,0]				# OUT solvent and odor transferred over bonds
+		self.enzymeExp 		= self.outputs[21,0]				# OUT enzyme expression rate
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
@@ -275,13 +308,10 @@ class Cell(Particle):
 		self.bInfoRead.fill(0) # reset bond info buffer
 		if self.chlorophyl < maxChlorophyl:
 			self.chlorophyl += growChlorophyl
-			self.energy -= rateChlorophyl * growChlorophyl
 		if self.enzyme < maxEnzyme:
 			self.enzyme += growEnzyme
-			self.energy -= rateEnzyme * growEnzyme
 		if self.transporter < maxTransporter:
 			self.transporter += growTransporter
-			self.energy -= rateTransporter * growTransporter
 	def mutate(self):
 		# weights
 		i = random.randint(0, outputLength-1)
@@ -315,6 +345,10 @@ class Cell(Particle):
 		p = world_to_view(self.shape.body.position)
 		color = (int(self.color[0]*255), int(self.color[1]*255), int(self.color[2]*255))
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
+	def draw_cytosol(self):
+		p = world_to_view(self.shape.body.position)
+		color = (int(self.enzyme/maxEnzyme* 255), int(self.chlorophyl/maxChlorophyl*255), int(self.transporter/maxTransporter*255))
+		pygame.draw.circle(screen, color, p, max(shellThickness, int(self.shape.radius * Z)-shellThickness))
 	def draw_bonds(self):
 		for bond in self.shape.body.constraints:
 			cellA = bond.cellA
@@ -349,8 +383,6 @@ class Cell(Particle):
 		for bond in self.shape.body.constraints:
 			cellA = bond.cellA
 			cellB = bond.cellB
-			if not isinstance(cellA, Cell)or not isinstance(cellB, Cell):
-				space.remove(bond)
 			if cellA == self: other = cellB
 			else: other = cellA
 			if self.age > divisionTime and (other.energy < 0 or self.bonding < 0.25):
@@ -473,12 +505,12 @@ food = False
 step = 0
 
 while running:
+# 	print(len(particles), len(space._get_constraints()))
 	if not pause:
 		if step % 1000 == 0: # check for living cells regulary
 			cells = 0
 			for particle in particles:
 				if isinstance(particle, Cell): cells += 1
-			print("\b"*100 + " "*100 + "\b"*100, end="", flush=True)
 			print("step:%8d\tcells:%5d" % (step, cells))
 
 		if len(particles) == 0 or seed:
@@ -499,6 +531,7 @@ while running:
 		for particle in particles:
 			if particle.check_remove(): particlesToRemove.append(particle)
 		for particle in particlesToRemove:
+			particle.remove_bonds()
 			space.remove(particle.shape.body, particle.shape)
 			particles.remove(particle)
 
@@ -517,11 +550,10 @@ while running:
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
 
-		solvent = disperse_solvent(solvent)
 		solvent[sunX1:sunX2, sunY1:sunY2, 0] += lightRate
-		solvent[:,:,2] 	*= enzymeDegrade
-		solvent[:,:,3] 	*= wasteDegrade
-		solvent[:,:,4:7] *= odorDegrade
+		solvent[:,:,2] *= 	enzymeDegrade
+		solvent[:,:,3] *= 	wasteDegrade
+		solvent[:,:,4:7] *= 	odorDegrade
 		solvent = disperse_solvent(solvent)
 		solvent = np.clip(solvent, 0, 1)
 		space.step(1/50.0)
@@ -547,6 +579,7 @@ while running:
 			displayLight = False
 			displaySolute = False
 			displayOdor = False
+			displayCytosol = False
 			follow = None
 			X, Y = 0, 0
 			Z = 1
@@ -559,7 +592,7 @@ while running:
 
 # graphic output 
 	if display:
-		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\tCells:%3d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
+		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\tCells: %3d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
 		screen.fill((0,0,0))
 		draw_lines(screen, lines)
 		draw_solvent(displayLight, displaySolute, displayOdor)
@@ -567,6 +600,8 @@ while running:
 			particle.draw_bonds()
 		for particle in particles:
 			particle.draw_body()
+			if displayCytosol:
+				particle.draw_cytosol()
 		if follow:
 			X, Y = - follow.shape.body.position
 			font = pygame.font.SysFont("monospace", 26)
@@ -624,6 +659,8 @@ while running:
 				seed = True
 			if event.type == KEYDOWN and event.key == K_f:
 				seed = True
+			if event.type == KEYDOWN and event.key == K_x:
+				displayCytosol = not displayCytosol
 			if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
 				mousePos = pygame.mouse.get_pos()
 				mousePos = view_to_world(mousePos)
