@@ -21,12 +21,13 @@ import select
 bX 		= (-2000, 2000)
 bY 		= (-1000, 1000)
 solventGrain 	= 50
-lightRate 	= 0.0005
-sunW		= 2
-sunH		= 2
+lightRate 	= 0.005
+sunSigmaX	= 5
+sunSigmaY	= 5
 odorDegrade 	= 0.98
 enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.99
+dispersionRate	= 0.2
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 foodOdor 	= np.array([0,0,0.5])
 brown 		= 0
@@ -50,11 +51,8 @@ maxEnzyme	= 1000
 maxTransporter	= 1000
 ## bonds
 maxBonds 	= 6
-bondStiff 	= 10
-bondDamp 	= 1
-bondBias	= 0.00001	# maximal speed the bond is able to generate
-bondForce	= 0.00001	# maximal force the bond is able to apply
-bondLength	= 100		# maximal length
+bondStiff 	= 50
+bondDamp 	= 10
 bondRatio 	= 50		# activation to bond length
 bondChangeRate	= 0.1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
@@ -95,6 +93,11 @@ wX = bX[1] - bX[0]
 wY = bY[1] - bY[0]
 solventNx = int( (bX[1] - bX[0]) / solventGrain )
 solventNy = int( (bY[1] - bY[0]) / solventGrain )
+sunX = cv2.getGaussianKernel(solventNx, sunSigmaX)
+sunY = cv2.getGaussianKernel(solventNy, sunSigmaY)
+sun = sunX.dot(sunY.T)
+centerInt = sun[solventNx/2, solventNy/2]
+sun = sun / centerInt # make center value 1
 
 class Particle(object):
 	def check_remove(self):
@@ -351,8 +354,6 @@ class Cell(Particle):
 		if len(self.shape.body.constraints) >= maxBonds or len(other.shape.body.constraints) >= maxBonds: return
 		length = self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), length, bondStiff, bondDamp)
-		spring.max_bias = bondBias
-		spring.max_force = bondForce
 		spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 		space.add(spring)
 		spring.cellA = self
@@ -392,8 +393,6 @@ class Cell(Particle):
 			x1, y1 = self.shape.body.position
 			x2, y2 = other.shape.body.position
 			length = ((x1-x2)**2 + (y1-y2)**2)**0.5
-			if length > bondLength or ( self.age > divisionTime and (other.energy <= 0 or self.bonding < 0.25) ):
-				space.remove(bond)
 			
 			
 def radius_from_area(area):
@@ -434,7 +433,7 @@ def collision_cell_with_cell(arbiter, space, data):
 	if cellA.bonding < 0.75 or cellB.bonding < 0.75: return
 	cellA.bond(cellB)
 def disperse_solvent(solvent):
-	return cv2.blur(solvent, (3,3)) 
+	return solvent +  (cv2.blur(solvent, (3,3)) - solvent) * dispersionRate # dirty hack to make smoothing slower
 def get_solvent(pos):
 	x, y = pos
 	x = x + wX / 2 # x with 0 at leftmost corner of world
@@ -547,7 +546,7 @@ while running:
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
 
-		solvent[:,:,0] += 	lightRate
+		solvent[:,:,0] += 	sun * lightRate
 		solvent[:,:,2] *= 	enzymeDegrade
 		solvent[:,:,3] *= 	wasteDegrade
 		solvent[:,:,4:7] *= 	odorDegrade
