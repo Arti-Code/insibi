@@ -19,9 +19,9 @@ import select
 
 # world constants
 bX 		= (-2000, 2000)
-bY 		= (-2000, 2000)
+bY 		= (-1000, 1000)
 solventGrain 	= 50
-lightRate 	= 1
+lightRate 	= 0.0005
 sunW		= 2
 sunH		= 2
 odorDegrade 	= 0.98
@@ -29,18 +29,19 @@ enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.99
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 foodOdor 	= np.array([0,0,0.5])
-brown 		= 5
+brown 		= 0
 spawnSigma 	= 200
 foodInterval 	= 99999999
 mutateInterval 	= 1
-mutRange 	= 0.05
+mutRange 	= 0.5
+colMutRange 	= 0.05 # color change has to be slow
 
 # display constants
 shellThickness = 4
 
 # particle constants
 divisionTime 	= 100
-maxAge 		= 999
+maxAge 		= 1000
 maxElasticity 	= 0.99
 minAttachment 	= 0.01
 maxAttachment 	= 0.5
@@ -49,11 +50,15 @@ maxEnzyme	= 1000
 maxTransporter	= 1000
 ## bonds
 maxBonds 	= 6
-bondStiff 	= 1000
-bondDamp 	= 1000
-bondRatio 	= 20
-bondEnRate 	= 10
-bondSolRate 	= 0.1
+bondStiff 	= 10
+bondDamp 	= 1
+bondBias	= 0.00001	# maximal speed the bond is able to generate
+bondForce	= 0.00001	# maximal force the bond is able to apply
+bondLength	= 100		# maximal length
+bondRatio 	= 50		# activation to bond length
+bondChangeRate	= 0.1		# change of length per timestep
+bondEnRate 	= 10		# bond energy transfer rate per timestep
+bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
 ## genetics
 maxActivation 	= 1
 nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
@@ -65,18 +70,18 @@ outputLength 	=           nInternals + nOutputs
 
 # cost and rate constants
 maxEn 		= 3000
-costExist 	= 0.5
+costExist 	= 1
 costWaste 	= 1
 costDivide 	= 100
 rateTransfer 	= 50
-costTransfer 	= 1
+costTransfer 	= 0.00001
 ## conversions
 massToEn 	= 100
 lightToEn	= 100
 nutrientToEn	= 100
 enToWaste 	= 0.0001
 ## costs for cytosol components
-rateChlorophyl	= 0.0000001
+rateChlorophyl	= 0.00001
 rateEnzyme	= 0.00001
 rateTransporter = 0.00001
 ## effectiveness of cytosol components
@@ -90,10 +95,6 @@ wX = bX[1] - bX[0]
 wY = bY[1] - bY[0]
 solventNx = int( (bX[1] - bX[0]) / solventGrain )
 solventNy = int( (bY[1] - bY[0]) / solventGrain )
-sunX1 = solventNx // 2 - sunW
-sunX2 = solventNx // 2 + sunW
-sunY1 = solventNx // 2 - sunH
-sunY2 = solventNx // 2 + sunH
 
 class Particle(object):
 	def check_remove(self):
@@ -104,6 +105,7 @@ class Particle(object):
 		oldAge = self.age > maxAge
 		return exitBorders or noEnergy or oldAge
 	def brownian(self):	
+		if brown <= 0: return
 		impulse = (random.randint(-brown,brown), random.randint(-brown,brown) )
 		self.shape.body.apply_impulse_at_local_point(impulse)
 	def transfer_energy(self, other, energy):
@@ -119,26 +121,6 @@ class Particle(object):
 		transfer = np.clip(transfer, 0, other.solvent[1:]) # clip to maximal the solvent concentration at the other cell
 		self.solvent[1:] -= transfer
 		other.solvent[1:] += transfer
-	def remove_bonds(self):
-		for bond in self.shape.body.constraints:
-			cellA = bond.cellA
-			cellB = bond.cellB
-# 			print(bond)
-# 			print(len(cellA.shape.body.constraints))
-# 			print(type(cellA.shape.body.constraints))
-# 			print(cellA.shape.body.constraints)
-# 			print(len(cellB.shape.body.constraints))
-# 			print(cellB.shape.body.constraints)
-# 			a = cellA.shape.body.constraints.copy()
-# 			a.remove(bond)
-# 			cellA.shape.body.constraints = a
-# 			space.remove(bond)
-# 			cellB.shape.body.constraints.remove(bond)
-# 			print(len(cellA.shape.body.constraints))
-# 			print(cellA.shape.body.constraints)
-# 			print(len(cellB.shape.body.constraints))
-# 			print(cellB.shape.body.constraints)
-# 			print()
 	def deshape(self):
 		self.shape = None
 		return None # expand to save shape parameters not allready encoded with energy and states
@@ -322,7 +304,7 @@ class Cell(Particle):
 		self.biases[i] += random.gauss(0, mutRange)
 		# color
 		i = random.randint(0, 2)
-		self.color[i] += random.gauss(0, mutRange)
+		self.color[i] += random.gauss(0, colMutRange)
 		self.color[i] = min(1, max(0, self.color[i]))
 	def check_division(self):
 		if (self.energy - costDivide) / 2 < 0: return False
@@ -336,6 +318,8 @@ class Cell(Particle):
 		self._adjust_body()
 		self.age = 0
 		x, y = self.shape.body.position
+		x += random.uniform(-1e-8, 1e-8) # add a very small difference in position, to deter budding in one distinct direction
+		y += random.uniform(-1e-8, 1e-8)
 		newCell = Cell(x, y, self)
 		self.mutate()
 		newCell.mutate()
@@ -347,7 +331,8 @@ class Cell(Particle):
 		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
 	def draw_cytosol(self):
 		p = world_to_view(self.shape.body.position)
-		color = (int(self.enzyme/maxEnzyme* 255), int(self.chlorophyl/maxChlorophyl*255), int(self.transporter/maxTransporter*255))
+		colorMax = max([self.enzyme/maxEnzyme, self.chlorophyl/maxChlorophyl, self.transporter/maxTransporter])
+		color = (int(self.enzyme/maxEnzyme/colorMax*255), int(self.chlorophyl/maxChlorophyl/colorMax*255), int(self.transporter/maxTransporter/colorMax*255))
 		pygame.draw.circle(screen, color, p, max(shellThickness, int(self.shape.radius * Z)-shellThickness))
 	def draw_bonds(self):
 		for bond in self.shape.body.constraints:
@@ -364,8 +349,11 @@ class Cell(Particle):
 			pygame.draw.line(screen, (red,blue,green), p1, p2, 2)
 	def bond(self, other):
 		if len(self.shape.body.constraints) >= maxBonds or len(other.shape.body.constraints) >= maxBonds: return
-		length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
+		length = self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), length, bondStiff, bondDamp)
+		spring.max_bias = bondBias
+		spring.max_force = bondForce
+		spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 		space.add(spring)
 		spring.cellA = self
 		spring.cellB = other
@@ -381,23 +369,31 @@ class Cell(Particle):
 	def _adjust_bonds(self):
 		bondsToRemove = []
 		for bond in self.shape.body.constraints:
+			lead = True # only set length once
 			cellA = bond.cellA
 			cellB = bond.cellB
-			if cellA == self: other = cellB
-			else: other = cellA
+			if cellA == self:
+				other = cellB
+			else:
+				other = cellA
+				lead = False
 			if other.check_remove(): # if other cell is dead, ignore bond and delete it
 				bond.cellA = None # unset references to the dead cell, otherwhise the dead cell will point to the bond and the bond
 				bond.cellB = None #  to the cell, making it impossible to remove either
 				space.remove(bond)
 				continue
-			if self.age > divisionTime and (other.energy < 0 or self.bonding < 0.25):
-				space.remove(bond)
-			bond.rest_length = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 			other.bInfoRead += self.bInfoWrite
 			self.bInfoRead += other.bInfoRead
 			self.transfer_energy(other, self.bEnTrans * bondEnRate)
 			self.transfer_solutes(other, self.bSolTrans * bondSolRate)
-			
+			if lead:
+				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
+				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
+			x1, y1 = self.shape.body.position
+			x2, y2 = other.shape.body.position
+			length = ((x1-x2)**2 + (y1-y2)**2)**0.5
+			if length > bondLength or ( self.age > divisionTime and (other.energy <= 0 or self.bonding < 0.25) ):
+				space.remove(bond)
 			
 			
 def radius_from_area(area):
@@ -492,7 +488,7 @@ space.threads = 2 # max number of threads
 space.iterations = 1 # minimum number of iterations for rough but fast collision detection
 lines = add_borders(space)
 solvent = np.zeros( (solventNx, solventNy, nSolvents) )
-solvent[:,:,0] = np.full( (solventNx, solventNy), 0.01)
+solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
 		
 # world behaviour
 particles = []
@@ -511,16 +507,14 @@ step = 0
 
 while running:
 	if not pause:
-		if step % 1000 == 0: # check for living cells regulary
-			cells = 0
-			for particle in particles:
-				if isinstance(particle, Cell): cells += 1
-			print("step:%8d\tcells:%5d" % (step, cells))
+		print("step:%8d\tcells:%5d" % (step, len(particles)), end="\r")
+		if step % 1000 == 0:
+			print()
 
 		if len(particles) == 0 or seed:
 			seed = False
 			step = 0
-			for i in range(100):
+			for i in range(20):
 				x = random.gauss(0, spawnSigma)	
 				y = random.gauss(0, spawnSigma)	
 				particles.append(Cell(x=x, y=y))
@@ -535,7 +529,6 @@ while running:
 		for particle in particles:
 			if particle.check_remove(): particlesToRemove.append(particle)
 		for particle in particlesToRemove:
-			particle.remove_bonds()
 			space.remove(particle.shape.body, particle.shape)
 			particles.remove(particle)
 
@@ -554,7 +547,7 @@ while running:
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
 
-		solvent[sunX1:sunX2, sunY1:sunY2, 0] += lightRate
+		solvent[:,:,0] += 	lightRate
 		solvent[:,:,2] *= 	enzymeDegrade
 		solvent[:,:,3] *= 	wasteDegrade
 		solvent[:,:,4:7] *= 	odorDegrade
@@ -585,6 +578,7 @@ while running:
 			displayOdor = False
 			displayCytosol = False
 			follow = None
+			fullcreen = False
 			X, Y = 0, 0
 			Z = 1
 		elif inStr == "close" or inStr == "c":
@@ -596,7 +590,7 @@ while running:
 
 # graphic output 
 	if display:
-		pygame.display.set_caption("GOD\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\tCells: %3d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
+		pygame.display.set_caption("InSiBi\tFPS: %2.2f\tStep: %8d\t[%d:%d] zoom: %2.2f\tCells: %3d" % (clock.get_fps(), step, X, Y, Z, len(particles)))
 		screen.fill((0,0,0))
 		draw_lines(screen, lines)
 		draw_solvent(displayLight, displaySolute, displayOdor)
@@ -610,7 +604,7 @@ while running:
 			X, Y = - follow.shape.body.position
 			font = pygame.font.SysFont("monospace", 20)
 			if isinstance(follow, Cell):
-				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f ABL:%3.2f ABL2:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, list(follow.shape.body.constraints)[0].rest_length, list(list(follow.shape.body.constraints)[0].cellA.shape.body.constraints)[0].rest_length, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f ABL:%s At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, ' '.join(["%3.2f " % bond.rest_length for bond in list(follow.shape.body.constraints)]), follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
 			elif isinstance(follow, Food):
 				string = "E:%4d A:%4d" % (follow.energy, follow.age)
 			else: break
@@ -662,7 +656,7 @@ while running:
 			if event.type == KEYDOWN and event.key == K_r:
 				seed = True
 			if event.type == KEYDOWN and event.key == K_f:
-				seed = True
+				fullscreen = not fullscreen
 			if event.type == KEYDOWN and event.key == K_x:
 				displayCytosol = not displayCytosol
 			if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
