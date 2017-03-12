@@ -25,6 +25,7 @@ lightRate 	= 0.005
 sunSigmaX	= 7
 sunSigmaY	= 7
 viscosity 	= 0.1 # viscosity of fluid. Higher values means more viscous - faster objects break stronger
+bondResRatio	= 0.5 # fluid resistance of bonds
 minAttachment 	= 0.01
 odorDegrade 	= 0.98
 enzymeDegrade 	= 0.9
@@ -35,9 +36,9 @@ foodOdor 	= np.array([0,0,0.5])
 brown 		= 0
 spawnSigma 	= 500 # 200
 foodInterval 	= 99999999
-mutateInterval 	= 2
-mutRange 	= 0.5
-colMutRange 	= 0.05 # color change has to be slow
+mutateInterval 	= 99999999
+mutRange 	= 0.05
+colMutRange 	= 0.01 # color change has to be slow
 e		= 2.718281828459 # Euler's number
 
 # display constants
@@ -59,6 +60,7 @@ bondChangeRate	= 1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
 bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
 ## genetics
+maxWeight	= 5
 maxActivation 	= 1
 nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
 nInternals 	= 20		# internal layers
@@ -275,7 +277,8 @@ class Cell(Particle):
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states) + self.biases ) # nonlinearity
 		self.states 		= np.clip(self.states, -maxActivation, maxActivation) 	# clip activations 
 		self.outputs 		= self.states[-nOutputs:,]				# make outputs
-		self.outputs 		= np.clip(self.outputs, 0, 1) 				# clip outputs
+		self.outputs 		= np.clip(self.outputs, -1, 1) 				# clip outputs
+		self.outputs 		= self.outputs * 0.5 + 0.5				# get to the range 0-1
 		## output
 		self.division 		= self.outputs[0,0] 				# OUT division
 		self.odor 		= self.outputs[1:4,0]				# OUT odor
@@ -305,16 +308,17 @@ class Cell(Particle):
 			self.transporter += growTransporter
 	def mutate(self):
 		# weights
-		i = random.randint(0, outputLength-1)
-		j = random.randint(0, stateLength-1)
-		self.weights[i,j] += random.gauss(0, mutRange)
+		mutations = np.random.normal(0, mutRange, self.weights.shape)
+		self.weights += mutations
+		self.weights = np.clip(self.weights, -maxWeight, maxWeight)
 		# biases
-		i = random.randint(0, outputLength-1)
-		self.biases[i] += random.gauss(0, mutRange)
+		mutations = np.random.normal(0, mutRange, self.biases.shape)
+		self.biases += mutations
+		self.biases = np.clip(self.biases, -maxWeight, maxWeight)
 		# color
-		i = random.randint(0, 2)
-		self.color[i] += random.gauss(0, colMutRange)
-		self.color[i] = min(1, max(0, self.color[i]))
+		mutations = np.random.normal(0, colMutRange, self.color.shape)
+		self.color += mutations
+		self.color = np.clip(self.color, 0, 1)
 	def check_division(self):
 		if (self.energy - costDivide) / 2 < 0: return False
 		return self.division > 0.5
@@ -330,7 +334,7 @@ class Cell(Particle):
 		x += random.uniform(-1e-8, 1e-8) # add a very small difference in position, to deter budding in one distinct direction
 		y += random.uniform(-1e-8, 1e-8)
 		newCell = Cell(x, y, self)
-		self.mutate()
+# 		self.mutate()
 		newCell.mutate()
 		bonds = list(self.shape.body.constraints)
 		bonds.sort(key=lambda x: -x.rest_length) # sort for shortest distances
@@ -421,14 +425,14 @@ class Cell(Particle):
 				posB = bond.cellB.shape.body.position
 				bondVec = posA - posB
 				if bondVec.length == 0: continue
-				bondVec.angle_degrees += 90
+				bondVec.angle_degrees += 90 # get normal vecor to bond
 				angle = velocVec.get_angle_degrees_between(bondVec)
-				if angle > 90 or angle < -90:
+				if angle > 90 or angle < -90: # rotate if necessary
 					dragVec += bondVec.projection(velocVec)
 				else:
 					dragVec -= bondVec.projection(velocVec)
-			dragVec *= 0.5
-			if dragVec.get_length() > velocVec.get_length():
+			dragVec *= bondResRatio
+			if dragVec.get_length() > velocVec.get_length(): # avoid accelaration via resistance
 				self.shape.body.velocity.length = 0
 			else:
 				self.shape.body.velocity.length -= dragVec
