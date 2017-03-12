@@ -22,46 +22,47 @@ bX 		= (-2000, 2000)
 bY 		= (-1000, 1000)
 solventGrain 	= 50
 lightRate 	= 0.005
-sunSigmaX	= 5
-sunSigmaY	= 5
+sunSigmaX	= 7
+sunSigmaY	= 7
+viscosity 	= 0.1 # viscosity of fluid. Higher values means more viscous - faster objects break stronger
+minAttachment 	= 0.01
 odorDegrade 	= 0.98
 enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.99
-dispersionRate	= 0.2
+dispersionRate	= 0.3
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 foodOdor 	= np.array([0,0,0.5])
 brown 		= 0
-spawnSigma 	= 200
+spawnSigma 	= 500 # 200
 foodInterval 	= 99999999
-mutateInterval 	= 1
+mutateInterval 	= 2
 mutRange 	= 0.5
 colMutRange 	= 0.05 # color change has to be slow
+e		= 2.718281828459 # Euler's number
 
 # display constants
 shellThickness = 4
 
 # particle constants
-divisionTime 	= 100
 maxAge 		= 1000
 maxElasticity 	= 0.99
-minAttachment 	= 0.01
-maxAttachment 	= 0.5
 maxChlorophyl	= 1000
 maxEnzyme	= 1000
 maxTransporter	= 1000
+divisionTime	= 100
 ## bonds
 maxBonds 	= 6
-bondStiff 	= 50
+bondStiff 	= 100
 bondDamp 	= 10
 bondRatio 	= 50		# activation to bond length
-bondChangeRate	= 0.1		# change of length per timestep
+bondChangeRate	= 1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
 bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
 ## genetics
 maxActivation 	= 1
 nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
-nInternals 	= 10		# internal layers
-nOutputs 	= 22		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr
+nInternals 	= 20		# internal layers
+nOutputs 	= 23		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr enzymeImmob
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
@@ -77,6 +78,7 @@ costTransfer 	= 0.00001
 massToEn 	= 100
 lightToEn	= 100
 nutrientToEn	= 100
+enzymeToEn	= 100
 enToWaste 	= 0.0001
 ## costs for cytosol components
 rateChlorophyl	= 0.00001
@@ -96,7 +98,7 @@ solventNy = int( (bY[1] - bY[0]) / solventGrain )
 sunX = cv2.getGaussianKernel(solventNx, sunSigmaX)
 sunY = cv2.getGaussianKernel(solventNy, sunSigmaY)
 sun = sunX.dot(sunY.T)
-centerInt = sun[solventNx/2, solventNy/2]
+centerInt = sun[solventNx//2, solventNy//2]
 sun = sun / centerInt # make center value 1
 
 class Particle(object):
@@ -187,30 +189,27 @@ class Cell(Particle):
 		self.shape.collision_type = 1
 		self.solvent = get_solvent(self.shape.body.position)
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
-			self.chlorophyl = 	1000
-			self.enzyme = 		0
-			self.enzymeExp = 	0
-			self.transporter = 	1000
 			self.weights = 		np.random.rand(outputLength, stateLength) * 2 - 1
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
 			self.states = 		np.zeros((stateLength, 1))
 			self.outputs = 		np.zeros((outputLength,1))
 			self.color = 		np.random.rand(3)
 			self.odor = 		np.zeros(3)
+			self.chlorophyl = 	1000
+			self.enzyme = 		0
+			self.transporter = 	1000
+			self.enzymeExp = 	0
+			self.enzymeImob = 	0
 			self.bonding = 		1
 			self.bLength = 		1
 			self.bStiff = 		1
 			self.bDamp = 		1
+			self.bEnTrans = 	0
 			self.bInfoRead = 	np.array([0.0,0.0,0.0])
 			self.bInfoWrite = 	np.array([0.0,0.0,0.0])
-			self.bEnTrans = 	0
 			self.bSolTrans = 	np.zeros(6)
 		else: 			# copy genes and interaction values
 			self.energy = 		parrent.energy	
-			self.chlorophyl = 	parrent.chlorophyl	
-			self.enzyme = 		parrent.enzyme
-			self.enzymeExp = 	parrent.enzymeExp
-			self.transporter =	parrent.transporter	
 			self.shape.body.velocity = parrent.shape.body.velocity
 			self.weights = 		np.copy(parrent.weights)
 			self.biases = 		np.copy(parrent.biases)
@@ -218,13 +217,18 @@ class Cell(Particle):
 			self.outputs = 		np.copy(parrent.outputs)
 			self.color = 		np.copy(parrent.color)
 			self.odor = 		np.copy(parrent.odor)
+			self.chlorophyl = 	parrent.chlorophyl	
+			self.enzyme = 		parrent.enzyme
+			self.transporter =	parrent.transporter	
+			self.enzymeExp = 	parrent.enzymeExp
+			self.enzymeImob = 	parrent.enzymeImob
 			self.bonding = 		parrent.bonding
 			self.bLength = 		parrent.bLength
 			self.bStiff = 		parrent.bStiff
 			self.bDamp = 		parrent.bDamp
+			self.bEnTrans = 	parrent.bEnTrans
 			self.bInfoRead =	np.copy(parrent.bInfoRead)
 			self.bInfoWrite = 	np.copy(parrent.bInfoWrite)
-			self.bEnTrans = 	parrent.bEnTrans
 			self.bSolTrans = 	np.copy(parrent.bSolTrans)
 	def step(self):
 		# initial checkups
@@ -286,10 +290,12 @@ class Cell(Particle):
 		self.bEnTrans 		= self.outputs[14,0]				# OUT energy sent over bonds
 		self.bSolTrans 		= self.outputs[15:21,0]				# OUT solvent and odor transferred over bonds
 		self.enzymeExp 		= self.outputs[21,0]				# OUT enzyme expression rate
+		self.enzymeImob 	= self.outputs[22,0]				# OUT enzyme surface imobilisation
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
 		self._adjust_bonds()
+		self._adjust_forces()
 		self.bInfoRead.fill(0) # reset bond info buffer
 		if self.chlorophyl < maxChlorophyl:
 			self.chlorophyl += growChlorophyl
@@ -326,6 +332,16 @@ class Cell(Particle):
 		newCell = Cell(x, y, self)
 		self.mutate()
 		newCell.mutate()
+		bonds = list(self.shape.body.constraints)
+		bonds.sort(key=lambda x: -x.rest_length) # sort for shortest distances
+		bonds = bonds[:5]
+		for bond in bonds: # bond to all the cells parrent is bound to.
+			cellA = bond.cellA
+			cellB = bond.cellB
+			if cellA is self: 	other = cellB
+			else:			other = cellA
+			if other.check_remove(): continue
+			newCell.bond(other)
 		self.bond(newCell)
 		return newCell
 	def draw_body(self):
@@ -352,9 +368,10 @@ class Cell(Particle):
 			pygame.draw.line(screen, (red,blue,green), p1, p2, 2)
 	def bond(self, other):
 		if len(self.shape.body.constraints) >= maxBonds or len(other.shape.body.constraints) >= maxBonds: return
-		length = self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
+		distance = self.shape.body.position.get_distance( other.shape.body.position )
+		length = self.shape.radius + other.shape.radius + distance # bond lengths are between surfaces of cells
 		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), length, bondStiff, bondDamp)
-		spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
+		if self.age < divisionTime: spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 		space.add(spring)
 		spring.cellA = self
 		spring.cellB = other
@@ -365,7 +382,6 @@ class Cell(Particle):
 		radius = radius_from_area(self.energy) # radius
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
-		self.shape.body.velocity = self.shape.body.velocity * (1-float(self.attachment)*maxAttachment - minAttachment)
 		self.shape.elasticity = self.elasticity
 	def _adjust_bonds(self):
 		bondsToRemove = []
@@ -388,11 +404,37 @@ class Cell(Particle):
 			self.transfer_energy(other, self.bEnTrans * bondEnRate)
 			self.transfer_solutes(other, self.bSolTrans * bondSolRate)
 			if lead:
+				if ( self.age > divisionTime and self.bonding < 0.25) or ( other.age > divisionTime and other.bonding < 0.25):
+					space.remove(bond)
+				if self.age > divisionTime:
+					bond.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
-			x1, y1 = self.shape.body.position
-			x2, y2 = other.shape.body.position
-			length = ((x1-x2)**2 + (y1-y2)**2)**0.5
+	def _adjust_forces(self):
+		velocVec = self.shape.body.velocity
+		if velocVec.length == 0: return
+		# fluid resistance of bonds
+		if len(self.shape.body.constraints): 
+			dragVec = pymunk.vec2d.Vec2d(0, 0)
+			for bond in self.shape.body.constraints: # go through all bonds
+				posA = bond.cellA.shape.body.position
+				posB = bond.cellB.shape.body.position
+				bondVec = posA - posB
+				if bondVec.length == 0: continue
+				bondVec.angle_degrees += 90
+				angle = velocVec.get_angle_degrees_between(bondVec)
+				if angle > 90 or angle < -90:
+					dragVec += bondVec.projection(velocVec)
+				else:
+					dragVec -= bondVec.projection(velocVec)
+			dragVec *= 0.5
+			if dragVec.get_length() > velocVec.get_length():
+				self.shape.body.velocity.length = 0
+			else:
+				self.shape.body.velocity.length -= dragVec
+		# fluid resistance of body
+		viscRatio = float(e ** ( - minAttachment - velocVec.get_length()*viscosity*self.attachment)) 
+		self.shape.body.velocity *= viscRatio
 			
 			
 def radius_from_area(area):
@@ -430,8 +472,9 @@ def collision_cell_with_cell(arbiter, space, data):
 	a,b = arbiter.shapes
 	cellA = a.Particle
 	cellB = b.Particle
-	if cellA.bonding < 0.75 or cellB.bonding < 0.75: return
-	cellA.bond(cellB)
+	if cellA.bonding > 0.75 or cellB.bonding > 0.75: cellA.bond(cellB)
+	enzyme = cellA.enzymeImob - cellB.enzymeImob
+	cellA.transfer_energy(cellB, -enzyme*enzymeToEn)
 def disperse_solvent(solvent):
 	return solvent +  (cv2.blur(solvent, (3,3)) - solvent) * dispersionRate # dirty hack to make smoothing slower
 def get_solvent(pos):
@@ -488,6 +531,10 @@ space.iterations = 1 # minimum number of iterations for rough but fast collision
 lines = add_borders(space)
 solvent = np.zeros( (solventNx, solventNy, nSolvents) )
 solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
+
+# view behaviour
+X, Y = 0, 0
+Z = 0.45
 		
 # world behaviour
 particles = []
@@ -508,14 +555,16 @@ while running:
 	if not pause:
 		print("step:%8d\tcells:%5d" % (step, len(particles)), end="\r")
 		if step % 1000 == 0:
-			print()
+			bonds = [len(list(cell.shape.body.constraints)) for cell in particles]
+			if len(particles) > 0:
+				print("\t\t\t\tbond-ratio: %2.2f" % (sum(bonds)/float(len(particles))))
 
 		if len(particles) == 0 or seed:
 			seed = False
 			step = 0
-			for i in range(20):
-				x = random.gauss(0, spawnSigma)	
-				y = random.gauss(0, spawnSigma)	
+			for i in range(100):
+				x = random.randint(bX[0]+1, bX[1]-1)	
+				y = random.randint(bY[0]+1, bY[1]-1)	
 				particles.append(Cell(x=x, y=y))
 		if food:
 			food = False
@@ -578,8 +627,6 @@ while running:
 			displayCytosol = False
 			follow = None
 			fullcreen = False
-			X, Y = 0, 0
-			Z = 1
 		elif inStr == "close" or inStr == "c":
 			pygame.display.quit()
 			pygame.quit()
@@ -603,7 +650,7 @@ while running:
 			X, Y = - follow.shape.body.position
 			font = pygame.font.SysFont("monospace", 20)
 			if isinstance(follow, Cell):
-				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d Tra:%3d Bd:%3.2f BL:%3.2f ABL:%s At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.transporter, follow.bonding, follow.bLength, ' '.join(["%3.2f " % bond.rest_length for bond in list(follow.shape.body.constraints)]), follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d EIm:%3.2f EXp: %3.2f Tra:%3d Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.enzymeImob, follow.enzymeExp, follow.transporter, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
 			elif isinstance(follow, Food):
 				string = "E:%4d A:%4d" % (follow.energy, follow.age)
 			else: break
