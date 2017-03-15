@@ -1,0 +1,5 @@
+saves/*
+parameters/*
+__pycache__
+*.pyc
+tmp

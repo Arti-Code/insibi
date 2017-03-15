@@ -1,5 +1,15 @@
 #!/home/david/anaconda3/bin/python
 
+# arguments
+import argparse
+from time import gmtime, strftime
+parser = argparse.ArgumentParser(description='InSiBi')
+parser.add_argument('--load', metavar='l', help='name of save or parameter file whith which to start')
+parser.add_argument('--save', metavar='s', help='name for save file')
+parser.add_argument('--interval', metavar='i', type=int, default=-1, help='interval in steps in which file is saved')
+args = parser.parse_args()
+if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
+
 import pdb
 import sys, random
 import pymunk
@@ -9,7 +19,6 @@ import numpy as np
 import scipy
 from scipy import ndimage
 import cv2
-import datetime
 import pickle
 import readline
 import select
@@ -17,59 +26,45 @@ import select
 # random.seed(1)
 # np.random.seed(1)
 
-# world constants
-bX 		= (-2000, 2000)
-bY 		= (-1000, 1000)
+# parameters
+## world
+worldWidth	= 2000
+worldHeight	= 1000
 solventGrain 	= 50
 lightRate 	= 0.005
 sunSigmaX	= 7
 sunSigmaY	= 7
-viscosity 	= 0.1 # viscosity of fluid. Higher values means more viscous - faster objects break stronger
-bondResRatio	= 0.5 # fluid resistance of bonds
+viscosity 	= 1 # viscosity of fluid. Higher values means more viscous - faster objects break stronger
+bondResRatio	= 1 # fluid resistance of bonds
 minAttachment 	= 0.01
 odorDegrade 	= 0.98
 enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.99
 dispersionRate	= 0.3
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
-foodOdor 	= np.array([0,0,0.5])
 brown 		= 0
 spawnSigma 	= 500 # 200
 foodInterval 	= 99999999
 mutateInterval 	= 99999999
 mutRange 	= 0.05
 colMutRange 	= 0.01 # color change has to be slow
-e		= 2.718281828459 # Euler's number
-
-# display constants
-shellThickness = 4
-
-# particle constants
+## particle
 maxAge 		= 1000
 maxElasticity 	= 0.99
 maxChlorophyl	= 1000
 maxEnzyme	= 1000
 maxTransporter	= 1000
 divisionTime	= 100
-## bonds
+### bonds
 maxBonds 	= 6
-bondStiff 	= 100
-bondDamp 	= 10
+maxBondLen	= 100
+bondStiff 	= 500
+bondDamp 	= 100
 bondRatio 	= 50		# activation to bond length
 bondChangeRate	= 1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
 bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
-## genetics
-maxWeight	= 5
-maxActivation 	= 1
-nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
-nInternals 	= 20		# internal layers
-nOutputs 	= 23		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr enzymeImmob
-inputLength  	= nInputs + nInternals 
-stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
-outputLength 	=           nInternals + nOutputs
-
-# cost and rate constants
+## cost and rate constants
 maxEn 		= 3000
 costExist 	= 1
 costWaste 	= 1
@@ -91,17 +86,7 @@ rateHeterotrophy = 0.001
 rateAutotrophy	= 0.001
 rateExpression 	= 0.001
 
-
-# derived constants
-wX = bX[1] - bX[0]
-wY = bY[1] - bY[0]
-solventNx = int( (bX[1] - bX[0]) / solventGrain )
-solventNy = int( (bY[1] - bY[0]) / solventGrain )
-sunX = cv2.getGaussianKernel(solventNx, sunSigmaX)
-sunY = cv2.getGaussianKernel(solventNy, sunSigmaY)
-sun = sunX.dot(sunY.T)
-centerInt = sun[solventNx//2, solventNy//2]
-sun = sun / centerInt # make center value 1
+params = ["worldWidth", "worldHeight", "solventGrain", "lightRate", "sunSigmaX", "sunSigmaY", "viscosity", "bondResRatio", "minAttachment", "odorDegrade", "enzymeDegrade", "wasteDegrade", "dispersionRate", "nSolvents", "brown", "spawnSigma", "foodInterval", "mutateInterval", "mutRange", "colMutRange", "maxAge", "maxElasticity", "maxChlorophyl", "maxEnzyme", "maxTransporter", "divisionTime", "maxBonds", "maxBondLen", "bondStiff", "bondDamp", "bondRatio", "bondChangeRate", "bondEnRate", "bondSolRate", "maxEn", "costExist", "costWaste", "costDivide", "rateTransfer", "costTransfer", "massToEn", "lightToEn", "nutrientToEn", "enzymeToEn", "enToWaste", "rateChlorophyl", "rateEnzyme", "rateTransporter", "rateHeterotrophy", "rateAutotrophy", "rateExpression"] 
 
 class Particle(object):
 	def check_remove(self):
@@ -128,9 +113,6 @@ class Particle(object):
 		transfer = np.clip(transfer, 0, other.solvent[1:]) # clip to maximal the solvent concentration at the other cell
 		self.solvent[1:] -= transfer
 		other.solvent[1:] += transfer
-	def deshape(self):
-		self.shape = None
-		return None # expand to save shape parameters not allready encoded with energy and states
 	def check_division(self): # dummy function
 		return False
 	def mutate(self):
@@ -138,6 +120,10 @@ class Particle(object):
 	def draw_body(self):
 		pass
 	def draw_bonds(self):
+		pass
+	def ghostify(self):
+		pass
+	def reincarnate(self):
 		pass
 
 class Food(Particle):
@@ -275,10 +261,10 @@ class Cell(Particle):
 		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
 		## nonlinearity
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states) + self.biases ) # nonlinearity
-		self.states 		= np.clip(self.states, -maxActivation, maxActivation) 	# clip activations 
-		self.outputs 		= self.states[-nOutputs:,]				# make outputs
-		self.outputs 		= np.clip(self.outputs, -1, 1) 				# clip outputs
-		self.outputs 		= self.outputs * 0.5 + 0.5				# get to the range 0-1
+		self.states 		= np.clip(self.states, -1, 1) 			# clip activations 
+		self.outputs 		= self.states[-nOutputs:,]			# make outputs
+		self.outputs 		= np.clip(self.outputs, -1, 1) 			# clip outputs
+		self.outputs 		= self.outputs * 0.5 + 0.5			# get to the range 0-1
 		## output
 		self.division 		= self.outputs[0,0] 				# OUT division
 		self.odor 		= self.outputs[1:4,0]				# OUT odor
@@ -379,6 +365,34 @@ class Cell(Particle):
 		space.add(spring)
 		spring.cellA = self
 		spring.cellB = other
+	def ghostify_bonds(self):
+		self.ghostBonds = []
+		for bond in self.shape.body.constraints:
+			if bond.cellB == self: continue # only let cellA ghostify bonds
+			self.ghostBonds.append(bond.cellB)
+	def ghostify(self):
+		self.ghostPosition = self.shape.body.position
+		self.ghostVelocity = self.shape.body.velocity
+		space.remove(self.shape.body, self.shape)
+		self.shape.body = None
+		self.shape = None
+	def reincarnate(self):
+		mass = max(1, self.energy / massToEn)
+		self.mass = self.energy / maxEn
+		radius = max(1, radius_from_area(self.energy))
+		inertia = pymunk.moment_for_circle(mass, 0, radius, (0,0))
+		body = pymunk.Body(mass, inertia)
+		body.position = self.ghostPosition
+		shape = pymunk.Circle(body, radius, (0,0))
+		space.add(body, shape)
+		self.shape = shape
+		self.shape.Particle = self
+		self.shape.collision_type = 1
+		self.shape.body.velocity = self.ghostVelocity
+		self.solvent = get_solvent(self.shape.body.position)
+	def reincarnate_bonds(self):
+		for bond in self.ghostBonds:
+			self.bond(bond)
 	def _adjust_body(self):
 		mass = self.energy / massToEn # mass
 		mass = max(1, mass)
@@ -413,7 +427,10 @@ class Cell(Particle):
 				if self.age > divisionTime:
 					bond.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
-				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
+# 				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
+				bond.rest_length = targetLength
+				if bond.rest_length > maxBondLen:
+					space.remove(bond)
 	def _adjust_forces(self):
 		velocVec = self.shape.body.velocity
 		if velocVec.length == 0: return
@@ -439,8 +456,7 @@ class Cell(Particle):
 		# fluid resistance of body
 		viscRatio = float(e ** ( - minAttachment - velocVec.get_length()*viscosity*self.attachment)) 
 		self.shape.body.velocity *= viscRatio
-			
-			
+
 def radius_from_area(area):
 	if area <= 0: return 0
 	return math.sqrt(area / 3.141592)
@@ -527,6 +543,53 @@ def draw_solvent(light=False, solute=False, odor=False):
 			x = int( (i-i1) * recXwidth )
 			y = int( (j-j1) * recYwidth )
 			pygame.draw.rect(screen, color, (x,y,recXwidth, recYwidth))
+def get_parameter_string():
+	paramDict = {name : eval(name) for name in params}
+	string = ""
+	for param in params:
+		paramVal = paramDict[param]
+		paramString = param + ' '*(20-len(param)) # padd parameter names with spaces
+		if type(paramVal) is int: # differentiate between ints and floats
+			string += "# %s %d\n" % (paramString, paramDict[param])
+		elif type(paramVal) is float:
+			string += "# %s %f\n" % (paramString, paramDict[param])
+	return string
+def str_to_parameter(string):
+	lines = string.split('\n')
+	for line in lines:
+		if line == '' or line[0] != '#': continue # ignore empty or non-comment lines
+		param, value = line[2:].split() # ignore comment 
+		try: # set global values, as int or float
+			globals()[param] = int(value)
+		except ValueError:
+			globals()[param] = float(value)
+# constants
+## particles
+foodOdor 	= np.array([0,0,0.5])
+maxWeight	= 5
+maxActivation 	= 1
+nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
+nInternals 	= 20		# internal layers
+nOutputs 	= 23		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr enzymeImmob
+inputLength  	= nInputs + nInternals 
+stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
+outputLength 	=           nInternals + nOutputs
+## display
+shellThickness 	= 4
+## math
+e		= 2.718281828459 # Euler's number
+## derived constants
+bX 		= (-worldWidth, worldWidth)
+bY 		= (-worldHeight, worldHeight)
+wX 		= bX[1] - bX[0]
+wY 		= bY[1] - bY[0]
+solventNx 	= int( (bX[1] - bX[0]) / solventGrain )
+solventNy 	= int( (bY[1] - bY[0]) / solventGrain )
+sunX 		= cv2.getGaussianKernel(solventNx, sunSigmaX)
+sunY 		= cv2.getGaussianKernel(solventNy, sunSigmaY)
+sun 		= sunX.dot(sunY.T)
+centerInt 	= sun[solventNx//2, solventNy//2]
+sun 		= sun / centerInt # make center value 1
 
 # global data structures
 space = pymunk.Space(threaded=True)
@@ -535,11 +598,9 @@ space.iterations = 1 # minimum number of iterations for rough but fast collision
 lines = add_borders(space)
 solvent = np.zeros( (solventNx, solventNy, nSolvents) )
 solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
-
 # view behaviour
 X, Y = 0, 0
 Z = 0.45
-		
 # world behaviour
 particles = []
 hadler_CF = space.add_collision_handler(1, 2)
@@ -553,8 +614,35 @@ pause = False
 display = False
 seed = False
 food = False
+save = False
 step = 0
 
+# load file
+if args.load is not None:
+	with open(args.load, "rb") as file:
+		string = ""
+		filePointer = None # file pointer to go to after reading parameters
+		for line in file:
+			try: # deconding will fail at some point
+				string += line.decode('utf-8')
+			except:
+				break
+			filePointer = file.tell()
+		str_to_parameter(string)
+		file.seek(filePointer)
+		try:
+			step = pickle.load(file)
+			particles = pickle.load(file)
+			for particle in particles:
+				particle.reincarnate()
+			for particle in particles:
+				particle.reincarnate_bonds()
+			solvent = pickle.load(file)
+			print("Read save file including %d cells at step %d." % (len(particles), step))
+		except EOFError:
+			print("Read parameters file.")
+		
+# main loop
 while running:
 	if not pause:
 		print("step:%8d\tcells:%5d" % (step, len(particles)), end="\r")
@@ -609,12 +697,32 @@ while running:
 		step += 1
 		if display:
 			clock.tick(50)
+			
+		if save or step % args.interval == 0:
+			save = False
+			with open(args.save, "wb") as file:
+				paramString = get_parameter_string()
+				file.write(str.encode(paramString)) # encode string as binary
+				for particle in particles:
+					particle.ghostify_bonds()
+				for particle in particles:
+					particle.ghostify()
+				pickle.dump(step, file)
+				pickle.dump(particles, file)
+				pickle.dump(solvent, file)
+				for particle in particles:
+					particle.reincarnate()
+				for particle in particles:
+					particle.reincarnate_bonds()
+			print("saved file %r" % args.save)
 
 # input
 	inStr = select.select([sys.stdin,],[],[],0.0)[0] # check if input is pending
 	if inStr:
 		inStr = input()
-		if inStr == "display" or inStr == "d":
+		if inStr == "":
+			pause = not pause
+		elif inStr == "display" or inStr == "d":
 			import pygame
 			from pygame.locals import *
 			import pymunk.pygame_util
@@ -631,10 +739,8 @@ while running:
 			displayCytosol = False
 			follow = None
 			fullcreen = False
-		elif inStr == "close" or inStr == "c":
-			pygame.display.quit()
-			pygame.quit()
-			display = False
+		elif inStr == "save" or inStr == "s":
+			save = True
 		elif inStr == "exit" or inStr == "e":
 			running = False
 
