@@ -6,7 +6,7 @@ from time import gmtime, strftime
 parser = argparse.ArgumentParser(description='InSiBi')
 parser.add_argument('--load', metavar='l', help='name of save or parameter file whith which to start')
 parser.add_argument('--save', metavar='s', help='name for save file')
-parser.add_argument('--interval', metavar='i', type=int, default=-1, help='interval in steps in which file is saved')
+parser.add_argument('--interval', metavar='i', type=int, default=1000000, help='interval in steps in which file is saved')
 args = parser.parse_args()
 if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
 
