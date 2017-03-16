@@ -4,9 +4,9 @@
 import argparse
 from time import gmtime, strftime
 parser = argparse.ArgumentParser(description='InSiBi')
-parser.add_argument('--load', metavar='l', help='name of save or parameter file whith which to start')
-parser.add_argument('--save', metavar='s', help='name for save file')
-parser.add_argument('--interval', metavar='i', type=int, default=1000000, help='interval in steps in which file is saved')
+parser.add_argument('-l', '--load', metavar='FILE', help='name of save or parameter file whith which to start')
+parser.add_argument('-s', '--save', metavar='FILE', help='name for save file')
+parser.add_argument('-i', '--interval', metavar='INT', type=int, default=1000000, help='interval in steps in which file is saved')
 args = parser.parse_args()
 if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
 
@@ -22,6 +22,7 @@ import cv2
 import pickle
 import readline
 import select
+from colour import Color
 # from numba import jit
 # random.seed(1)
 # np.random.seed(1)
@@ -58,7 +59,7 @@ divisionTime	= 100
 ### bonds
 maxBonds 	= 6
 maxBondLen	= 100
-bondStiff 	= 500
+bondStiff 	= 50
 bondDamp 	= 100
 bondRatio 	= 50		# activation to bond length
 bondChangeRate	= 1		# change of length per timestep
@@ -125,6 +126,8 @@ class Particle(object):
 		pass
 	def reincarnate(self):
 		pass
+	def draw_information(self):
+		pass
 
 class Food(Particle):
 	def __init__(self, x=0, y=0, energy=1000):
@@ -156,6 +159,13 @@ class Food(Particle):
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
 		self.shape.body.mass = mass
+	def draw_information(self):
+		font = pygame.font.SysFont("monospace", 20)
+		string = "E:%4d A:%4d" % (follow.energy, follow.age)
+		text = font.render(string, 1, (255,255,255))
+		textpos = text.get_rect()
+		textpos.centerx = screen.get_rect().centerx
+		screen.blit(text, textpos)
 
 class Cell(Particle):
 	def __init__(self, x=0, y=0, parrent=None):
@@ -177,7 +187,7 @@ class Cell(Particle):
 		self.shape.collision_type = 1
 		self.solvent = get_solvent(self.shape.body.position)
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
-			self.weights = 		np.random.rand(outputLength, stateLength) * 2 - 1
+			self.weights = 		np.random.rand(outputLength, inputLength) * 2 - 1
 			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
 			self.states = 		np.zeros((stateLength, 1))
 			self.outputs = 		np.zeros((outputLength,1))
@@ -260,7 +270,7 @@ class Cell(Particle):
 		self.states[13,0] 	= self.enzyme / maxEnzyme			# IN enzyme
 		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
 		## nonlinearity
-		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states) + self.biases ) # nonlinearity
+		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states[:inputLength,]) + self.biases ) # nonlinearity
 		self.states 		= np.clip(self.states, -1, 1) 			# clip activations 
 		self.outputs 		= self.states[-nOutputs:,]			# make outputs
 		self.outputs 		= np.clip(self.outputs, -1, 1) 			# clip outputs
@@ -342,7 +352,7 @@ class Cell(Particle):
 		p = world_to_view(self.shape.body.position)
 		colorMax = max([self.enzyme/maxEnzyme, self.chlorophyl/maxChlorophyl, self.transporter/maxTransporter])
 		color = (int(self.enzyme/maxEnzyme/colorMax*255), int(self.chlorophyl/maxChlorophyl/colorMax*255), int(self.transporter/maxTransporter/colorMax*255))
-		pygame.draw.circle(screen, color, p, max(shellThickness, int(self.shape.radius * Z)-shellThickness))
+		pygame.draw.circle(screen, color, p, max(2, int(self.shape.radius * Z)))
 	def draw_bonds(self):
 		for bond in self.shape.body.constraints:
 			cellA = bond.cellA
@@ -393,6 +403,64 @@ class Cell(Particle):
 	def reincarnate_bonds(self):
 		for bond in self.ghostBonds:
 			self.bond(bond)
+	def draw_information(self):
+		font = pygame.font.SysFont("monospace", 20)
+		string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d EIm:%3.2f EXp: %3.2f Tra:%3d Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.enzymeImob, follow.enzymeExp, follow.transporter, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
+		text = font.render(string, 1, (255,255,255))
+		textpos = text.get_rect()
+		textpos.centerx = screen.get_rect().centerx
+		screen.blit(text, textpos)
+
+		subWidth = screenOffX*0.6 - 25
+		subHeight = screenOffY*2 - 100
+		subX = screenOffX*1.4
+		subY = 25
+		sub = pygame.Surface((subWidth, subHeight))
+		sub.set_alpha(200)
+		sub.fill((255,255,255))
+			
+		xSpaceProts1 = int(subWidth * 0.05)
+		xSpaceProts2 = int(subWidth * 0.20)
+		xSpaceProts3 = int(subWidth * 0.6)
+		xSpaceProts4 = int(subWidth * 0.65)
+		ySpaceProts = int((subHeight-50) / stateLength)
+		displayStates = self.states / 2 + 0.5
+		if not hasattr(self, "prevStates"):
+			self.prevStates = self.states
+			self.prevDispStates = displayStates
+		for i in range(stateLength):
+			if i < inputLength:
+				p1 = (xSpaceProts2, ySpaceProts*i + 25)
+				for j in range(nInputs, stateLength):
+					p2 = (xSpaceProts3, ySpaceProts*j + 25)
+					n = min(1, max(0, float(self.weights[j-nInputs,i]))) # adjust index by nInputs
+					color = colorScale[int(n*255)]
+					color = (int(color.red*255), int(color.green*255), int(color.blue*255))
+					pygame.draw.lines(sub, color, False, [p1, p2], 1)
+
+			p = (xSpaceProts1, ySpaceProts*i + 15)
+			textPro = font.render("% 4.2f" % self.prevStates[i], 1, (50,50,50))
+			sub.blit(textPro, p)
+
+			p = (xSpaceProts2, ySpaceProts*i + 25)
+			n = min(1, max(0, float(self.prevDispStates[i])))
+			color = colorScale[int(n*255)]
+			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
+			pygame.draw.circle(sub, color, p, 10)
+
+			p = (xSpaceProts3, ySpaceProts*i + 25)
+			n = min(1, max(0, float(displayStates[i])))
+			color = colorScale[int(n*255)]
+			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
+			pygame.draw.circle(sub, color, p, 10)
+
+			p = (xSpaceProts4, ySpaceProts*i + 15)
+			textPro = font.render("% 4.2f %s" % (self.states[i], stateNames[i]), 1, (50,50,50))
+			sub.blit(textPro, p)
+		screen.blit(sub, (subX, subY))
+		self.prevStates = self.states
+		self.prevDispStates = displayStates
+
 	def _adjust_body(self):
 		mass = self.energy / massToEn # mass
 		mass = max(1, mass)
@@ -568,16 +636,16 @@ def str_to_parameter(string):
 foodOdor 	= np.array([0,0,0.5])
 maxWeight	= 5
 maxActivation 	= 1
-nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  springs_attached bondInfo1-3 chlorophyl enzyme transporter
-nInternals 	= 20		# internal layers
+nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  nBonds bondInfo1-3 chlorophyl enzyme transporter
+nInternals 	= 10		# internal layers
 nOutputs 	= 23		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr enzymeImmob
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
-## display
-shellThickness 	= 4
+stateNames = ["energy", "light", "nutrient", "enzyme", "waste", "odorR", "odorG", "odorB", "nBonds", "bondInfoR", "bondInfoG", "bondInfoB", "chloro", "expression", "transporter", "int1", "int2", "int3", "int4", "int5", "int6", "int7", "int8", "int9", "int10", "division", "elasticity", "odorR", "odorG", "odorB", "bonding", "bondLen", "attachment", "bondInfoR", "bondInfoG", "bondInfoB", "bondEnTran", "transNut", "transEnz", "transWaste", "trasOdorR", "transOdorG", "transOdorB", "growChloro", "growExpr", "growTrans", "enzymeEx", "enzymeImmob"]
 ## math
-e		= 2.718281828459 # Euler's number
+e		= 2.71828182845 # Euler's number
+pi		= 3.14159265359 # Pi
 ## derived constants
 bX 		= (-worldWidth, worldWidth)
 bY 		= (-worldHeight, worldHeight)
@@ -590,6 +658,7 @@ sunY 		= cv2.getGaussianKernel(solventNy, sunSigmaY)
 sun 		= sunX.dot(sunY.T)
 centerInt 	= sun[solventNx//2, solventNy//2]
 sun 		= sun / centerInt # make center value 1
+colorScale	= list(Color("red").range_to(Color("white"), 128)) + list(Color("white").range_to(Color("blue"), 128)) # color scale from red to white to blue
 
 # global data structures
 space = pymunk.Space(threaded=True)
@@ -758,16 +827,7 @@ while running:
 				particle.draw_cytosol()
 		if follow:
 			X, Y = - follow.shape.body.position
-			font = pygame.font.SysFont("monospace", 20)
-			if isinstance(follow, Cell):
-				string = "E:%4d A:%4d Div:%3.2f Chl:%3d Enz:%3d EIm:%3.2f EXp: %3.2f Tra:%3d Bd:%3.2f BL:%3.2f At:%3.2f El:%3.2f Od:%3.2f:%3.2f:%3.2f" % (follow.energy, follow.age, follow.division, follow.chlorophyl, follow.enzyme, follow.enzymeImob, follow.enzymeExp, follow.transporter, follow.bonding, follow.bLength, follow.attachment, follow.shape.elasticity, follow.odor[0], follow.odor[1], follow.odor[2])
-			elif isinstance(follow, Food):
-				string = "E:%4d A:%4d" % (follow.energy, follow.age)
-			else: break
-			text = font.render(string, 1, (255,255,255))
-			textpos = text.get_rect()
-			textpos.centerx = screen.get_rect().centerx
-			screen.blit(text, textpos)
+			follow.draw_information()
 			if follow.check_remove():
 				follow = None
 		pygame.display.flip()
