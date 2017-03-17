@@ -4,9 +4,10 @@
 import argparse
 from time import gmtime, strftime
 parser = argparse.ArgumentParser(description='InSiBi')
-parser.add_argument('-l', '--load', metavar='FILE', help='name of save or parameter file whith which to start')
-parser.add_argument('-s', '--save', metavar='FILE', help='name for save file')
-parser.add_argument('-i', '--interval', metavar='INT', type=int, default=1000000, help='interval in steps in which file is saved')
+parser.add_argument('-l', '--load', metavar='FILE', 	help='name of save or parameter file whith which to start')
+parser.add_argument('-s', '--save', metavar='FILE', 	help='name for save file')
+parser.add_argument('-g', '--genes', metavar='FILE', 	help='prefix for genes file', default="genes")
+parser.add_argument('-i', '--interval', metavar='INT',  help='interval in steps in which file is saved', type=int, default=1000000)
 args = parser.parse_args()
 if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
 
@@ -58,7 +59,7 @@ maxTransporter	= 1000
 divisionTime	= 100
 ### bonds
 maxBonds 	= 6
-maxBondLen	= 100
+maxBondLen	= 50
 bondStiff 	= 50
 bondDamp 	= 100
 bondRatio 	= 50		# activation to bond length
@@ -411,52 +412,60 @@ class Cell(Particle):
 		textpos.centerx = screen.get_rect().centerx
 		screen.blit(text, textpos)
 
-		subWidth = screenOffX*0.6 - 25
+		subWidth = screenOffX - 25
 		subHeight = screenOffY*2 - 100
-		subX = screenOffX*1.4
+		subX = screenOffX
 		subY = 25
 		sub = pygame.Surface((subWidth, subHeight))
 		sub.set_alpha(200)
 		sub.fill((255,255,255))
 			
-		xSpaceProts1 = int(subWidth * 0.05)
-		xSpaceProts2 = int(subWidth * 0.20)
-		xSpaceProts3 = int(subWidth * 0.6)
-		xSpaceProts4 = int(subWidth * 0.65)
-		ySpaceProts = int((subHeight-50) / stateLength)
+		xSpaceProts1 = int(subWidth * 0.03)
+		xSpaceProts2 = int(subWidth * 0.30)
+		xSpaceProts3 = int(subWidth * 0.73)
+		xSpaceProts4 = int(subWidth * 0.75)
+		ySpaceInputs = int((subHeight-50) / inputLength)
+		ySpaceOutputs = int((subHeight-50) / outputLength)
+
 		displayStates = self.states / 2 + 0.5
-		if not hasattr(self, "prevStates"):
+		if not hasattr(self, "prevStates"): # check to see if previous state is logged
 			self.prevStates = self.states
 			self.prevDispStates = displayStates
-		for i in range(stateLength):
-			if i < inputLength:
-				p1 = (xSpaceProts2, ySpaceProts*i + 25)
-				for j in range(nInputs, stateLength):
-					p2 = (xSpaceProts3, ySpaceProts*j + 25)
-					n = min(1, max(0, float(self.weights[j-nInputs,i]))) # adjust index by nInputs
-					color = colorScale[int(n*255)]
-					color = (int(color.red*255), int(color.green*255), int(color.blue*255))
-					pygame.draw.lines(sub, color, False, [p1, p2], 1)
 
-			p = (xSpaceProts1, ySpaceProts*i + 15)
-			textPro = font.render("% 4.2f" % self.prevStates[i], 1, (50,50,50))
+		for i in range(inputLength):
+			p1 = (xSpaceProts2, ySpaceInputs*i + 25)
+			for j in range(outputLength):
+				p2 = (xSpaceProts3, ySpaceOutputs*j + 25)
+				n = min(1, max(0, float(self.weights[j,i])))
+				color = colorScale[int(n*255)]
+				color = (int(color.red*255), int(color.green*255), int(color.blue*255))
+				pygame.draw.lines(sub, color, False, [p1, p2], 1)
+
+			p = (xSpaceProts1, ySpaceInputs*i + 15)
+			textPro = font.render("%s % 4.2f" % (stateNames[i].ljust(12), self.prevStates[i]), 1, (50,50,50))
 			sub.blit(textPro, p)
 
-			p = (xSpaceProts2, ySpaceProts*i + 25)
+			p = (xSpaceProts2, ySpaceInputs*i + 25)
 			n = min(1, max(0, float(self.prevDispStates[i])))
 			color = colorScale[int(n*255)]
 			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
 			pygame.draw.circle(sub, color, p, 10)
 
-			p = (xSpaceProts3, ySpaceProts*i + 25)
-			n = min(1, max(0, float(displayStates[i])))
+		for i in range(outputLength):
+			p = (xSpaceProts3, ySpaceOutputs*i + 25)
+			n = min(1, max(0, float(self.biases[i])))
+			color = colorScale[int(n*255)]
+			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
+			pygame.draw.circle(sub, color, p, 15)
+			n = min(1, max(0, float(displayStates[i+nInputs])))
 			color = colorScale[int(n*255)]
 			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
 			pygame.draw.circle(sub, color, p, 10)
 
-			p = (xSpaceProts4, ySpaceProts*i + 15)
-			textPro = font.render("% 4.2f %s" % (self.states[i], stateNames[i]), 1, (50,50,50))
+			p = (xSpaceProts4, ySpaceOutputs*i + 15)
+			textPro = font.render("% 4.2f %s" % (self.states[i], stateNames[i+nInputs]), 1, (50,50,50))
 			sub.blit(textPro, p)
+
 		screen.blit(sub, (subX, subY))
 		self.prevStates = self.states
 		self.prevDispStates = displayStates
@@ -492,6 +501,7 @@ class Cell(Particle):
 			if lead:
 				if ( self.age > divisionTime and self.bonding < 0.25) or ( other.age > divisionTime and other.bonding < 0.25):
 					space.remove(bond)
+					continue
 				if self.age > divisionTime:
 					bond.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
@@ -499,6 +509,7 @@ class Cell(Particle):
 				bond.rest_length = targetLength
 				if bond.rest_length > maxBondLen:
 					space.remove(bond)
+					continue
 	def _adjust_forces(self):
 		velocVec = self.shape.body.velocity
 		if velocVec.length == 0: return
@@ -634,15 +645,19 @@ def str_to_parameter(string):
 # constants
 ## particles
 foodOdor 	= np.array([0,0,0.5])
-maxWeight	= 5
+maxWeight	= 1
 maxActivation 	= 1
-nInputs 	= 15 		# IN: 	energy  light solutes1-3 odors1-3  nBonds bondInfo1-3 chlorophyl enzyme transporter
-nInternals 	= 10		# internal layers
-nOutputs 	= 23		# OUT:   division  elasticicty  N_odor  bonding(break<-0.25..0.75<make)  bondLengthChange  attachment  N_bondInfo  bondEnTrans bondSoluteTrans growChlorophyl growEnzyme growTransporter enzymeExpr enzymeImmob
+## genes
+inputNames = ["energy", "light", "nutrient", "enzyme", "waste", "odorR", "odorG", "odorB", "nBonds", "bondInfoR", "bondInfoG", "bondInfoB", "chloro", "expression", "transporter"]
+internalNames = ["int1", "int2", "int3", "int4", "int5", "int6", "int7", "int8", "int9", "int10"]
+outputNames = ["division", "elasticity", "odorR", "odorG", "odorB", "bonding", "bondLen", "attachment", "bondInfoR", "bondInfoG", "bondInfoB", "bondEnTran", "transNut", "transEnz", "transWaste", "trasOdorR", "transOdorG", "transOdorB", "growChloro", "growExpr", "growTrans", "enzymeEx", "enzymeImmob"]
+stateNames 	= inputNames + internalNames + outputNames
+nInputs 	= len(inputNames)
+nInternals 	= len(internalNames)
+nOutputs 	= len(outputNames)
 inputLength  	= nInputs + nInternals 
 stateLength  	= nInputs + nInternals + nOutputs # values for inputs, internal states and outputs are also aranged like that calculation time
 outputLength 	=           nInternals + nOutputs
-stateNames = ["energy", "light", "nutrient", "enzyme", "waste", "odorR", "odorG", "odorB", "nBonds", "bondInfoR", "bondInfoG", "bondInfoB", "chloro", "expression", "transporter", "int1", "int2", "int3", "int4", "int5", "int6", "int7", "int8", "int9", "int10", "division", "elasticity", "odorR", "odorG", "odorB", "bonding", "bondLen", "attachment", "bondInfoR", "bondInfoG", "bondInfoB", "bondEnTran", "transNut", "transEnz", "transWaste", "trasOdorR", "transOdorG", "transOdorB", "growChloro", "growExpr", "growTrans", "enzymeEx", "enzymeImmob"]
 ## math
 e		= 2.71828182845 # Euler's number
 pi		= 3.14159265359 # Pi
@@ -684,6 +699,7 @@ display = False
 seed = False
 food = False
 save = False
+saveGenes = False
 step = 0
 
 # load file
@@ -784,6 +800,20 @@ while running:
 				for particle in particles:
 					particle.reincarnate_bonds()
 			print("saved file %r" % args.save)
+		
+		if saveGenes:
+			saveGenes = False
+			fileName = "%s_%d.dat" % (args.genes, step)
+			with open(fileName, "w") as file:
+				for particle in particles:
+					for row in particle.weights:
+						for weight in row: 
+							file.write("% 4.2f " % weight)				
+						file.write("\n")
+					for bias in particle.biases:			
+						file.write("% 4.2f " % bias)
+					file.write("\n\n")
+
 
 # input
 	inStr = select.select([sys.stdin,],[],[],0.0)[0] # check if input is pending
@@ -810,6 +840,8 @@ while running:
 			fullcreen = False
 		elif inStr == "save" or inStr == "s":
 			save = True
+		elif inStr == "genes" or inStr == "g":
+			saveGenes = True
 		elif inStr == "exit" or inStr == "e":
 			running = False
 
