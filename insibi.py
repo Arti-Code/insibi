@@ -46,9 +46,8 @@ dispersionRate	= 0.3
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 brown 		= 0
 spawnSigma 	= 500 # 200
-foodInterval 	= 99999999
 mutateInterval 	= 99999999
-mutRange 	= 0.05
+mutRange 	= 0.01
 colMutRange 	= 0.01 # color change has to be slow
 ## particle
 maxAge 		= 1000
@@ -57,9 +56,10 @@ maxChlorophyl	= 1000
 maxEnzyme	= 1000
 maxTransporter	= 1000
 divisionTime	= 100
+geneInit	= 0.001
 ### bonds
 maxBonds 	= 6
-maxBondLen	= 50
+maxBondLen	= 150
 bondStiff 	= 50
 bondDamp 	= 100
 bondRatio 	= 50		# activation to bond length
@@ -88,7 +88,7 @@ rateHeterotrophy = 0.001
 rateAutotrophy	= 0.001
 rateExpression 	= 0.001
 
-params = ["worldWidth", "worldHeight", "solventGrain", "lightRate", "sunSigmaX", "sunSigmaY", "viscosity", "bondResRatio", "minAttachment", "odorDegrade", "enzymeDegrade", "wasteDegrade", "dispersionRate", "nSolvents", "brown", "spawnSigma", "foodInterval", "mutateInterval", "mutRange", "colMutRange", "maxAge", "maxElasticity", "maxChlorophyl", "maxEnzyme", "maxTransporter", "divisionTime", "maxBonds", "maxBondLen", "bondStiff", "bondDamp", "bondRatio", "bondChangeRate", "bondEnRate", "bondSolRate", "maxEn", "costExist", "costWaste", "costDivide", "rateTransfer", "costTransfer", "massToEn", "lightToEn", "nutrientToEn", "enzymeToEn", "enToWaste", "rateChlorophyl", "rateEnzyme", "rateTransporter", "rateHeterotrophy", "rateAutotrophy", "rateExpression"] 
+params = ["worldWidth", "worldHeight", "solventGrain", "lightRate", "sunSigmaX", "sunSigmaY", "viscosity", "bondResRatio", "minAttachment", "odorDegrade", "enzymeDegrade", "wasteDegrade", "dispersionRate", "nSolvents", "brown", "spawnSigma", "mutateInterval", "mutRange", "colMutRange", "maxAge", "maxElasticity", "maxChlorophyl", "maxEnzyme", "maxTransporter", "divisionTime", "maxBonds", "maxBondLen", "bondStiff", "bondDamp", "bondRatio", "bondChangeRate", "bondEnRate", "bondSolRate", "maxEn", "costExist", "costWaste", "costDivide", "rateTransfer", "costTransfer", "massToEn", "lightToEn", "nutrientToEn", "enzymeToEn", "enToWaste", "rateChlorophyl", "rateEnzyme", "rateTransporter", "rateHeterotrophy", "rateAutotrophy", "rateExpression"] 
 
 class Particle(object):
 	def check_remove(self):
@@ -188,8 +188,8 @@ class Cell(Particle):
 		self.shape.collision_type = 1
 		self.solvent = get_solvent(self.shape.body.position)
 		if parrent is None: 	# generate random genes and set interaction values to defaut values
-			self.weights = 		np.random.rand(outputLength, inputLength) * 2 - 1
-			self.biases = 		np.random.rand(outputLength, 1) * 2 - 1 
+			self.weights = 		np.random.normal(0, geneInit, (outputLength, stateLength))
+			self.biases = 		np.random.normal(0, geneInit, (stateLength,1))
 			self.states = 		np.zeros((stateLength, 1))
 			self.outputs = 		np.zeros((outputLength,1))
 			self.color = 		np.random.rand(3)
@@ -270,8 +270,9 @@ class Cell(Particle):
 		self.states[12,0] 	= self.chlorophyl / maxChlorophyl 		# IN chlorophyl
 		self.states[13,0] 	= self.enzyme / maxEnzyme			# IN enzyme
 		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
+		self.states[:nInputs,0] = self.states[:nInputs,0] * 2 - 1		# zero center
 		## nonlinearity
-		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states[:inputLength,]) + self.biases ) # nonlinearity
+		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states + self.biases )) # nonlinearity
 		self.states 		= np.clip(self.states, -1, 1) 			# clip activations 
 		self.outputs 		= self.states[-nOutputs:,]			# make outputs
 		self.outputs 		= np.clip(self.outputs, -1, 1) 			# clip outputs
@@ -424,7 +425,7 @@ class Cell(Particle):
 		xSpaceProts2 = int(subWidth * 0.30)
 		xSpaceProts3 = int(subWidth * 0.73)
 		xSpaceProts4 = int(subWidth * 0.75)
-		ySpaceInputs = int((subHeight-50) / inputLength)
+		ySpaceInputs = int((subHeight-50) / stateLength)
 		ySpaceOutputs = int((subHeight-50) / outputLength)
 
 		displayStates = self.states / 2 + 0.5
@@ -432,11 +433,11 @@ class Cell(Particle):
 			self.prevStates = self.states
 			self.prevDispStates = displayStates
 
-		for i in range(inputLength):
+		for i in range(stateLength):
 			p1 = (xSpaceProts2, ySpaceInputs*i + 25)
 			for j in range(outputLength):
 				p2 = (xSpaceProts3, ySpaceOutputs*j + 25)
-				n = min(1, max(0, float(self.weights[j,i])))
+				n = min(1, max(0, float(self.weights[j,i]*0.5+0.5)))
 				color = colorScale[int(n*255)]
 				color = (int(color.red*255), int(color.green*255), int(color.blue*255))
 				pygame.draw.lines(sub, color, False, [p1, p2], 1)
@@ -453,7 +454,7 @@ class Cell(Particle):
 
 		for i in range(outputLength):
 			p = (xSpaceProts3, ySpaceOutputs*i + 25)
-			n = min(1, max(0, float(self.biases[i])))
+			n = min(1, max(0, float(self.biases[i]*0.5+0.5)))
 			color = colorScale[int(n*255)]
 			color = (int(color.red*255), int(color.green*255), int(color.blue*255))
 			pygame.draw.circle(sub, color, p, 15)
@@ -463,7 +464,7 @@ class Cell(Particle):
 			pygame.draw.circle(sub, color, p, 10)
 
 			p = (xSpaceProts4, ySpaceOutputs*i + 15)
-			textPro = font.render("% 4.2f %s" % (self.states[i], stateNames[i+nInputs]), 1, (50,50,50))
+			textPro = font.render("% 4.2f %s" % (self.states[i+nInputs], stateNames[i+nInputs]), 1, (50,50,50))
 			sub.blit(textPro, p)
 
 		screen.blit(sub, (subX, subY))
@@ -477,7 +478,7 @@ class Cell(Particle):
 		radius = radius_from_area(self.energy) # radius
 		radius = max(1, radius)
 		self.shape.unsafe_set_radius(radius)
-		self.shape.elasticity = self.elasticity
+		self.shape.elasticity = min(maxElasticity, self.elasticity)
 	def _adjust_bonds(self):
 		bondsToRemove = []
 		for bond in self.shape.body.constraints:
