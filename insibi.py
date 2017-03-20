@@ -12,8 +12,8 @@ parser.add_argument('-I', '--ignore', action='store_true',  help='ignore previou
 args = parser.parse_args()
 if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
 
-import pdb
-import sys, random
+import sys
+import random
 import pymunk
 from pymunk import Vec2d
 import math
@@ -22,7 +22,6 @@ import scipy
 from scipy import ndimage
 import cv2
 import pickle
-import readline
 import select
 from colour import Color
 # from numba import jit
@@ -240,7 +239,6 @@ class Cell(Particle):
 			self.bInfoWrite = 	np.copy(parrent.bInfoWrite)
 			self.bSolTrans = 	np.copy(parrent.bSolTrans)
 	def step(self):
-		if self.check_remove(): return
 		# initial checkups
 		self.solvent = get_solvent(self.shape.body.position)
 		self.mass = self.energy / maxEn
@@ -281,7 +279,7 @@ class Cell(Particle):
 		self.states[12,0] 	= self.chlorophyl / maxChlorophyl 		# IN chlorophyl
 		self.states[13,0] 	= self.enzyme / maxEnzyme			# IN enzyme
 		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
-		self.states[15,0] 	= math.cos(step*self.oszillFreq)		# IN oszillator
+# 		self.states[15,0] 	= math.cos(step*self.oszillFreq)		# IN oszillator
 		self.states[:nInputs,0] = self.states[:nInputs,0] * 2 - 1		# zero center
 		## nonlinearity
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states + self.biases )) # nonlinearity
@@ -304,7 +302,7 @@ class Cell(Particle):
 		self.bSolTrans 		= self.outputs[15:21,0]				# OUT solvent and odor transferred over bonds
 		self.enzymeExp 		= self.outputs[21,0]				# OUT enzyme expression rate
 		self.enzymeImob 	= self.outputs[22,0]				# OUT enzyme surface imobilisation
-		self.oszillFreq 	= self.outputs[23,0]				# OUT enzyme surface imobilisation
+# 		self.oszillFreq 	= self.outputs[23,0]				# OUT enzyme surface imobilisation
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
@@ -381,11 +379,12 @@ class Cell(Particle):
 			green = int(min(1, max(0.3, bInfo[2]/2 + 0.5)) * 255)
 			pygame.draw.line(screen, (red,blue,green), p1, p2, 2)
 	def bond(self, other):
+		if self.bonding < 0 or other.bonding < 0: return
 		if len(self.shape.body.constraints) >= maxBonds or len(other.shape.body.constraints) >= maxBonds: return
 		distance = self.shape.body.position.get_distance( other.shape.body.position )
 		length = self.shape.radius + other.shape.radius + distance # bond lengths are between surfaces of cells
 		spring = pymunk.constraint.DampedSpring(self.shape.body, other.shape.body, (0,0), (0,0), length, bondStiff, bondDamp)
-		if self.age < divisionTime: spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
+		if self.age == 0: spring.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 		space.add(spring)
 		spring.cellA = self
 		spring.cellB = other
@@ -512,7 +511,7 @@ class Cell(Particle):
 			self.transfer_energy(other, self.bEnTrans * bondEnRate)
 			self.transfer_solutes(other, self.bSolTrans * bondSolRate)
 			if lead:
-				if ( self.age > divisionTime and self.bonding < 0.25) or ( other.age > divisionTime and other.bonding < 0.25):
+				if ( self.age > divisionTime and self.bonding < 0) or ( other.age > divisionTime and other.bonding < 0):
 					space.remove(bond)
 					continue
 				if self.age > divisionTime:
@@ -584,7 +583,7 @@ def collision_cell_with_cell(arbiter, space, data):
 	a,b = arbiter.shapes
 	cellA = a.Particle
 	cellB = b.Particle
-	if cellA.bonding > 0.75 or cellB.bonding > 0.75: cellA.bond(cellB)
+	cellA.bond(cellB)
 	enzyme = cellA.enzymeImob - cellB.enzymeImob
 	cellA.transfer_energy(cellB, -enzyme*enzymeToEn)
 def disperse_solvent(solvent):
@@ -701,11 +700,11 @@ solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
 X, Y = 0, 0
 Z = 0.45
 # world behaviour
-particles = []
 hadler_CF = space.add_collision_handler(1, 2)
 hadler_CF.post_solve = collision_cell_with_food
 hadler_CC = space.add_collision_handler(1, 1)
 hadler_CC.post_solve = collision_cell_with_cell
+particles = []
 particlesToRemove = []
 particlesToAdd = []
 running = True
@@ -770,8 +769,8 @@ while running:
 		for particle in particles: 
 			if particle.check_remove(): 	particlesToRemove.append(particle)
 		for particle in particlesToRemove:
-			particles.remove(particle)
 			space.remove(particle.shape.body, particle.shape)
+			particles.remove(particle)
 
 		particlesToRemove = []
 		for particle in particles: 
@@ -782,14 +781,9 @@ while running:
 			if particle.check_division(): 	particlesToAdd.append(particle.divide())
 			if particle.check_remove(): 	particlesToRemove.append(particle)
 
-# 		# movement of world borders
-# 		movement = len(particles) * 0.01
-# 		for particle in particles:
-# 			particle.move(movement,0)
-
 		for particle in particlesToRemove:
-			particles.remove(particle)
 			space.remove(particle.shape.body, particle.shape)
+			particles.remove(particle)
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
 
@@ -828,8 +822,6 @@ while running:
 			sunX %= solventNx
 			sunY %= solventNy
 
-			
-
 		space.step(1/50.0)
 		step += 1
 		if display:
@@ -840,17 +832,21 @@ while running:
 			with open(args.save, "wb") as file:
 				paramString = get_parameter_string()
 				file.write(str.encode(paramString)) # encode string as binary
+				cells = []
 				for particle in particles:
-					particle.ghostify_bonds()
-				for particle in particles:
-					particle.ghostify()
+					if isinstance(particle, Cell):
+						cells.append(particle)
+				for cell in cells:
+					cell.ghostify_bonds()
+				for cell in cells:
+					cell.ghostify()
 				pickle.dump(step, file)
-				pickle.dump(particles, file)
+				pickle.dump(cells, file)
 				pickle.dump(solvent, file)
-				for particle in particles:
-					particle.reincarnate()
-				for particle in particles:
-					particle.reincarnate_bonds()
+				for cell in cells:
+					cell.reincarnate()
+				for cell in cells:
+					cell.reincarnate_bonds()
 			print("\nsaved file %r" % args.save)
 		
 		if saveGenes:
