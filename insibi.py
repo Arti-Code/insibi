@@ -5,12 +5,14 @@ import argparse
 from time import gmtime, strftime
 parser = argparse.ArgumentParser(description='InSiBi')
 parser.add_argument('-l', '--load', metavar='FILE', 	help='name of save or parameter file whith which to start')
-parser.add_argument('-s', '--save', metavar='FILE', 	help='name for save file')
+parser.add_argument('-s', '--save', metavar='FILE', 	help='name for save prefix. default: \'./saves/<date>_<step>.dat\'')
 parser.add_argument('-g', '--genes', metavar='FILE', 	help='prefix for genes file', default="genes")
 parser.add_argument('-i', '--interval', metavar='INT',  help='interval in steps in which file is saved', type=int, default=10000)
-parser.add_argument('-I', '--ignore', action='store_true',  help='ignore previous saved parameters')
+parser.add_argument('-I', '--ignore', action='store_true',  help='ignore previous saved parameters, use InSiBi defaults')
+parser.add_argument('-o', '--over', action='store_true',  help='overwrite previous saves')
+parser.add_argument('-S', '--screensaver', action='store_true',  help='start in screensaver mode')
 args = parser.parse_args()
-if args.save is None: args.save = "saves/%s.dat" % strftime("%Y-%m-%d-%H:%M", gmtime())
+if args.save is None: args.save = "saves/%s" % strftime("%Y-%m-%d-%H:%M", gmtime())
 
 import sys
 import random
@@ -33,31 +35,35 @@ from colour import Color
 worldWidth	= 2000
 worldHeight	= 1000
 solventGrain 	= 50
-lightRate 	= 0.00003
+# lightRate 	= 0.00003
+lightRate 	= 0.01
 sunSigmaX	= 7
 sunSigmaY	= 7
-sunMoveStep	= 50 # interval in which sun is moved
-viscosity 	= 0.5 # fluid viscosity. Higher values means more viscous - faster objects break stronger
+sunMoveStep	= 5 # interval in which sun is moved
+viscosity 	= 0.1 # fluid viscosity. Higher values means more viscous - faster objects break stronger
 bondResRatio	= 10 # fluid resistance of bonds
 minAttachment 	= 0.01
-maxAttachment 	= 0.5
-odorDegrade 	= 0.98
+maxAttachment 	= 0.99
+odorDegrade 	= 0.9
 enzymeDegrade 	= 0.9
-wasteDegrade 	= 0.99
+wasteDegrade 	= 0.9
 dispersionRate	= 0.3
 nSolvents 	= 7 # odors 1-3, energy/enzyme/waste, light
 brown 		= 0
 spawnSigma 	= 500 # 200
-mutateInterval 	= 99999999
-mutRange 	= 0.05
-colMutRange 	= 0.05 # color change has to be slow
+mutRange 	= 0.01
+colMutRange 	= mutRange
+UVmutateInterval = 5000 # UV event triggers more serious mutations than regular
+UVmutRange	= 0.5
+UVmutFrequ	= 0.001
+UVcolMutRange 	= 0.1
 ## particle
 maxAge 		= 1000
 maxElasticity 	= 0.99
 maxChlorophyl	= 1000
 maxEnzyme	= 1000
 maxTransporter	= 1000
-divisionTime	= 100
+divisionTime	= 5
 geneInit	= 0.001
 ### bonds
 maxBonds 	= 6
@@ -72,7 +78,7 @@ bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
 maxEn 		= 3000
 costExist 	= 1
 costWaste 	= 1
-costDivide 	= 100
+costDivide 	= 500
 rateTransfer 	= 50
 costTransfer 	= 0.00001
 ## conversions
@@ -90,7 +96,7 @@ rateHeterotrophy = 0.001
 rateAutotrophy	= 0.001
 rateExpression 	= 0.001
 
-params = ["worldWidth", "worldHeight", "solventGrain", "lightRate", "sunSigmaX", "sunSigmaY", "viscosity", "bondResRatio", "minAttachment", "odorDegrade", "enzymeDegrade", "wasteDegrade", "dispersionRate", "nSolvents", "brown", "spawnSigma", "mutateInterval", "mutRange", "colMutRange", "maxAge", "maxElasticity", "maxChlorophyl", "maxEnzyme", "maxTransporter", "divisionTime", "maxBonds", "maxBondLen", "bondStiff", "bondDamp", "bondRatio", "bondChangeRate", "bondEnRate", "bondSolRate", "maxEn", "costExist", "costWaste", "costDivide", "rateTransfer", "costTransfer", "massToEn", "lightToEn", "nutrientToEn", "enzymeToEn", "enToWaste", "rateChlorophyl", "rateEnzyme", "rateTransporter", "rateHeterotrophy", "rateAutotrophy", "rateExpression"] 
+params = ["worldWidth", "worldHeight", "solventGrain", "lightRate", "sunSigmaX", "sunSigmaY", "viscosity", "bondResRatio", "minAttachment", "odorDegrade", "enzymeDegrade", "wasteDegrade", "dispersionRate", "nSolvents", "brown", "spawnSigma", "UVmutateInterval", "mutRange", "colMutRange", "UVmutateInterval", "UVmutRange", "UVmutFrequ", "UVcolMutRange", "maxAge", "maxElasticity", "maxChlorophyl", "maxEnzyme", "maxTransporter", "divisionTime", "maxBonds", "maxBondLen", "bondStiff", "bondDamp", "bondRatio", "bondChangeRate", "bondEnRate", "bondSolRate", "maxEn", "costExist", "costWaste", "costDivide", "rateTransfer", "costTransfer", "massToEn", "lightToEn", "nutrientToEn", "enzymeToEn", "enToWaste", "rateChlorophyl", "rateEnzyme", "rateTransporter", "rateHeterotrophy", "rateAutotrophy", "rateExpression", "sunX", "sunY"] 
 
 class Particle(object):
 	def check_remove(self):
@@ -279,7 +285,7 @@ class Cell(Particle):
 		self.states[12,0] 	= self.chlorophyl / maxChlorophyl 		# IN chlorophyl
 		self.states[13,0] 	= self.enzyme / maxEnzyme			# IN enzyme
 		self.states[14,0] 	= self.transporter / maxTransporter 		# IN transporter
-# 		self.states[15,0] 	= math.cos(step*self.oszillFreq)		# IN oszillator
+		self.states[15,0] 	= math.cos(step*self.oszillFreq)		# IN oszillator
 		self.states[:nInputs,0] = self.states[:nInputs,0] * 2 - 1		# zero center
 		## nonlinearity
 		self.states[nInputs:,] 	= np.tanh( np.dot(self.weights, self.states + self.biases )) # nonlinearity
@@ -302,7 +308,7 @@ class Cell(Particle):
 		self.bSolTrans 		= self.outputs[15:21,0]				# OUT solvent and odor transferred over bonds
 		self.enzymeExp 		= self.outputs[21,0]				# OUT enzyme expression rate
 		self.enzymeImob 	= self.outputs[22,0]				# OUT enzyme surface imobilisation
-# 		self.oszillFreq 	= self.outputs[23,0]				# OUT enzyme surface imobilisation
+		self.oszillFreq 	= self.outputs[23,0]				# OUT enzyme surface imobilisation
 		# adjust body and bond attributes, deposit substances
 		self.age += 1
 		self._adjust_body()
@@ -328,9 +334,24 @@ class Cell(Particle):
 		mutations = np.random.normal(0, colMutRange, self.color.shape)
 		self.color += mutations
 		self.color = np.clip(self.color, 0, 1)
+	def mutate_UV(self):	
+		# weights
+		mutations = np.random.normal(0, UVmutRange, self.weights.shape)
+		pick = np.random.choice([True, False], size=mutations.shape, p=[UVmutFrequ, 1-UVmutFrequ])
+		self.weights = np.where(pick, self.weights+mutations, self.weights) # where false, keep values, otherwhise replace with mutated
+		self.weights = np.clip(self.weights, -maxWeight, maxWeight)
+		# biases
+		mutations = np.random.normal(0, UVmutRange, self.biases.shape)
+		pick = np.random.choice([True, False], size=mutations.shape, p=[UVmutFrequ, 1-UVmutFrequ])
+		self.biases = np.where(pick, self.biases+mutations, self.biases) # where false, keep values, otherwhise replace with mutated
+		self.biases = np.clip(self.biases, -maxWeight, maxWeight)
+		# color
+		mutations = np.random.normal(0, UVcolMutRange, self.color.shape)
+		self.color += mutations
+		self.color = np.clip(self.color, 0, 1)
 	def check_division(self):
 		if (self.energy - costDivide) / 2 < 0: return False
-		return self.division > 0.5
+		return self.division > 0
 	def divide(self):
 		self.energy -= costDivide
 		self.energy /= 2
@@ -526,24 +547,24 @@ class Cell(Particle):
 		velocVec = self.shape.body.velocity
 		if velocVec.length == 0: return
 		# fluid resistance of bonds
-		if len(self.shape.body.constraints): 
-			dragVec = pymunk.vec2d.Vec2d(0, 0)
-			for bond in self.shape.body.constraints: # go through all bonds
-				posA = bond.cellA.shape.body.position
-				posB = bond.cellB.shape.body.position
-				bondVec = posA - posB
-				if bondVec.length == 0: continue
-				bondVec.angle_degrees += 90 # get normal vecor to bond
-				angle = velocVec.get_angle_degrees_between(bondVec)
-				if angle > 90 or angle < -90: # rotate if necessary
-					dragVec += bondVec.projection(velocVec)
-				else:
-					dragVec -= bondVec.projection(velocVec)
-			dragVec *= bondResRatio
-			if dragVec.get_length() > velocVec.get_length(): # avoid accelaration via resistance
-				self.shape.body.velocity.length = 0
-			else:
-				self.shape.body.velocity.length -= dragVec
+# 		if len(self.shape.bdy.constraints): 
+# 			dragVec = pmunk.vec2d.Vec2d(0, 0)
+# 			for bond inself.shape.body.constraints: # go through all bonds
+# 				pos = bond.cellA.shape.body.position
+# 				pos = bond.cellB.shape.body.position
+# 				bonVec = posA - posB
+# 				if ondVec.length == 0: continue
+# 				bonVec.angle_degrees += 90 # get normal vecor to bond
+# 				ange = velocVec.get_angle_degrees_between(bondVec)
+# 				if ngle > 90 or angle < -90: # rotate if necessary
+# 				       dragVec += bondVec.projection(velocVec)
+# 				els:
+# 				       dragVec -= bondVec.projection(velocVec)
+# 			dragVec *= ondResRatio
+# 			if dragVec.et_length() > velocVec.get_length(): # avoid accelaration via resistance
+# 				sel.shape.body.velocity.length = 0
+# 			else:
+# 				sel.shape.body.velocity.length -= dragVec
 		# fluid resistance of body
 		viscRatio = float(e ** (- velocVec.get_length()*viscosity*max(minAttachment, min( maxAttachment, self.attachment)))) 
 		self.shape.body.velocity *= viscRatio
@@ -654,6 +675,20 @@ def str_to_parameter(string):
 			globals()[param] = int(value)
 		except ValueError:
 			globals()[param] = float(value)
+def sun_move(x,y,sunpatch):
+	x = solventNx + x
+	y = solventNy + y
+	iFromX = list(range(solventNy*2))
+	iFromY = list(range(solventNy*2))
+	iToX = iFromX[x:(solventNx*2)] + iFromX[0:x]
+	iToY = iFromY[y:(solventNy*2)] + iFromY[0:y]
+	tmpSun = np.zeros_like(sun)
+	tmpSun[iToX,:] = sun[iFromX,:]
+	tmpSun[:,iToY] = sun[:,iFromY]
+	sunpatch = np.copy(tmpSun[solventNx//2:solventNx+solventNx//2 ,solventNy//2:solventNy+solventNy//2])
+
+	
+
 # constants
 ## particles
 foodOdor 	= np.array([0,0,0.5])
@@ -661,7 +696,7 @@ maxWeight	= 1
 maxActivation 	= 1
 ## genes
 inputNames = ["energy", "light", "nutrient", "enzyme", "waste", "odorR", "odorG", "odorB", "nBonds", "bondInfoR", "bondInfoG", "bondInfoB", "chlorophyll", "expression", "transporter", "oszillator"]
-internalNames = ["int1", "int2", "int3", "int4", "int5", "int6", "int7", "int8", "int9", "int10"]
+internalNames = ["int1", "int2", "int3", "int4", "int5", "int6", "int7", "int8", "int9", "int10", "int11", "int12", "int13", "int14", "int15", "int16", "int17", "int18", "int19", "int20"]
 outputNames = ["division", "elasticity", "odorR", "odorG", "odorB", "bonding", "bondLen", "attachment", "bondInfoR", "bondInfoG", "bondInfoB", "bondEnTran", "transNut", "transEnz", "transWaste", "trasOdorR", "transOdorG", "transOdorB", "growChloro", "growExpr", "growTrans", "enzymeEx", "enzymeImmob", "oszillFrequ"]
 stateNames 	= inputNames + internalNames + outputNames
 nInputs 	= len(inputNames)
@@ -680,22 +715,21 @@ wX 		= bX[1] - bX[0]
 wY 		= bY[1] - bY[0]
 solventNx 	= int( (bX[1] - bX[0]) / solventGrain )
 solventNy 	= int( (bY[1] - bY[0]) / solventGrain )
-sunXgaus 	= cv2.getGaussianKernel(solventNx, sunSigmaX)
-sunYgaus 	= cv2.getGaussianKernel(solventNy, sunSigmaY)
+sunXgaus 	= cv2.getGaussianKernel(solventNx*2, sunSigmaX)
+sunYgaus 	= cv2.getGaussianKernel(solventNy*2, sunSigmaY)
 sun 		= sunXgaus.dot(sunYgaus.T)
-sunX		= solventNx//2
-sunY		= solventNy//2
-centerInt 	= sun[sunX//2, sunY//2]
+sunX		= solventNx 
+sunY		= solventNy
+centerInt 	= sun[solventNx, solventNy]
 sun 		= sun / centerInt # make center value 1
 colorScale	= list(Color("red").range_to(Color("white"), 128)) + list(Color("white").range_to(Color("blue"), 128)) # color scale from red to white to blue
-
 # global data structures
 space = pymunk.Space(threaded=True)
 space.threads = 2 # max number of threads
 space.iterations = 1 # minimum number of iterations for rough but fast collision detection
 lines = add_borders(space)
 solvent = np.zeros( (solventNx, solventNy, nSolvents) )
-solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
+# solvent[:,:,0] = np.full( (solventNx, solventNy), 0.2)
 # view behaviour
 X, Y = 0, 0
 Z = 0.45
@@ -715,6 +749,24 @@ food = False
 save = False
 saveGenes = False
 step = 1
+
+if args.screensaver:
+	import pygame
+	from pygame.locals import *
+	import pymunk.pygame_util
+	pygame.init()
+	infoObject = pygame.display.Info()
+	dim = (infoObject.current_w, infoObject.current_h)
+	screenOffX, screenOffY = infoObject.current_w / 2, infoObject.current_h / 2
+	screen = pygame.display.set_mode(dim)
+	clock = pygame.time.Clock()
+	display = True
+	displayLight = False
+	displaySolute = False
+	displayOdor = False
+	displayCytosol = False
+	follow = None
+	pygame.display.toggle_fullscreen()
 
 # load file
 if args.load is not None:
@@ -748,13 +800,14 @@ while running:
 		bonds = [len(list(cell.shape.body.constraints)) for cell in particles]
 		bondR = sum(bonds)/max(1, float(len(particles))) # guard against division by zero
 		print("step:%8d\tcells:%5d\tbond-ratio: %2.2f" % (step, len(particles), bondR), end="\r")
+# 		print("step:%8d\tcells:%5d\tbond-ratio: %2.2f\tsun:%3d,%3d" % (step, len(particles), bondR, sunX, sunY), end="\r")
 		if step % 1000 == 0:
 			print()
 
 		if len(particles) == 0 or seed:
 			seed = False
-			step = 0
-			for i in range(100):
+			step = 1
+			for i in range(50):
 				x = random.randint(bX[0]+1, bX[1]-1)	
 				y = random.randint(bY[0]+1, bY[1]-1)	
 				particles.append(Cell(x=x, y=y))
@@ -776,8 +829,8 @@ while running:
 		for particle in particles: 
 			particle.brownian()
 			particle.step()
-			if space.current_time_step % mutateInterval == 0:
-				particle.mutate()
+			if step % UVmutateInterval == 0:
+				particle.mutate_UV()
 			if particle.check_division(): 	particlesToAdd.append(particle.divide())
 			if particle.check_remove(): 	particlesToRemove.append(particle)
 
@@ -788,39 +841,20 @@ while running:
 		particlesToAdd = []
 
 		# solvent and light
-		solvent[:,:,0] += 	sun * lightRate # 0.0001 / max(1,len(particles))
+		## sun movement
+		if step % sunMoveStep == 0:
+			case = random.randint(0,3)
+			if sunX < 3*solventNx//2 and case == 0: sunX += 1
+			if sunX > solventNx//2 and case == 1: sunX -= 1
+			if sunY < 3*solventNy//2 and case == 2: sunY += 1
+			if sunY > solventNy//2 and case == 3: sunY -= 1
+		## solvent
+		solvent[:,:,0] += 	lightRate * sun[(sunX-solventNx//2):(sunX+solventNx//2), (sunY-solventNy//2):(sunY+solventNy//2)]
 		solvent[:,:,2] *= 	enzymeDegrade
 		solvent[:,:,3] *= 	wasteDegrade
 		solvent[:,:,4:7] *= 	odorDegrade
 		solvent = disperse_solvent(solvent)
 		solvent = np.clip(solvent, 0, 1)
-
-
-		# sun movement
-		if step % sunMoveStep == 0:
-			case = random.randint(0,3)
-			if sunX < solventNx and case == 0:
-				iFrom = list(range(solventNx))
-				iTo = [iFrom[-1]] + iFrom[:-1]
-				sun[iFrom,:] = sun[iTo,:]
-				sunX += 1
-			if sunX >= 0 and case == 1:
-				iFrom = list(range(solventNx))
-				iTo = [iFrom[0]] + iFrom[1:]
-				sun[iFrom,:] = sun[iTo,:]
-				sunX -= 1
-			if sunY < solventNx and case == 2:
-				iFrom = list(range(solventNy))
-				iTo = [iFrom[-1]] + iFrom[:-1]
-				sun[:,iFrom] = sun[:,iTo]
-				sunY += 1
-			if sunY >= 0 and case == 3:
-				iFrom = list(range(solventNy))
-				iTo = [iFrom[0]] + iFrom[1:]
-				sun[:,iFrom] = sun[:,iTo]
-				sunX -= 1
-			sunX %= solventNx
-			sunY %= solventNy
 
 		space.step(1/50.0)
 		step += 1
@@ -829,7 +863,9 @@ while running:
 			
 		if save or step%args.interval==0 and not len(particles)==0:
 			save = False
-			with open(args.save, "wb") as file:
+			if args.over: 	saveName = "%s.dat" % (args.save)
+			else:		saveName = "%s_%06d.dat" % (args.save, step)
+			with open(saveName, "wb") as file:
 				paramString = get_parameter_string()
 				file.write(str.encode(paramString)) # encode string as binary
 				cells = []
@@ -847,7 +883,7 @@ while running:
 					cell.reincarnate()
 				for cell in cells:
 					cell.reincarnate_bonds()
-			print("\nsaved file %r" % args.save)
+			print("\nsaved file %r" % saveName)
 		
 		if saveGenes:
 			saveGenes = False
@@ -907,6 +943,7 @@ while running:
 				particle.draw_cytosol()
 		if follow:
 			X, Y = - follow.shape.body.position
+			X -= screenOffY / Z / 2
 			follow.draw_information()
 			if follow.check_remove():
 				follow = None
@@ -940,8 +977,6 @@ while running:
 					pygame.display.quit()
 					pygame.quit()
 					display = False
-			if event.type == KEYDOWN and event.key == K_m:
-				pygame.display.toggle_fullscreen()
 			if event.type == KEYDOWN and event.key == K_SPACE:
 				pause = not pause
 			if event.type == KEYDOWN and event.key == K_d:
@@ -955,7 +990,7 @@ while running:
 			if event.type == KEYDOWN and event.key == K_r:
 				seed = True
 			if event.type == KEYDOWN and event.key == K_f:
-				fullscreen = not fullscreen
+				pygame.display.toggle_fullscreen()
 			if event.type == KEYDOWN and event.key == K_x:
 				displayCytosol = not displayCytosol
 			if event.type == pygame.MOUSEBUTTONUP and event.button == 1: # left=1
