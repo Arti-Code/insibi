@@ -11,8 +11,12 @@ parser.add_argument('-i', '--interval', metavar='INT',  help='interval in steps 
 parser.add_argument('-I', '--ignore', action='store_true',  help='ignore previous saved parameters, use InSiBi defaults')
 parser.add_argument('-o', '--over', action='store_true',  help='overwrite previous saves')
 parser.add_argument('-S', '--screensaver', action='store_true',  help='start in screensaver mode')
+parser.add_argument('-r', '--resume', action='store_true',  help='load last save in date format from directory \'./saves/\'')
 args = parser.parse_args()
 if args.save is None: args.save = "saves/%s" % strftime("%Y-%m-%d-%H:%M", gmtime())
+if args.load is not None and args.resume:
+	print("Can't load and resume at the same time!")
+	exit(1)
 
 import sys
 import random
@@ -41,9 +45,9 @@ sunSigmaX	= 7
 sunSigmaY	= 7
 sunMoveStep	= 5 # interval in which sun is moved
 viscosity 	= 0.1 # fluid viscosity. Higher values means more viscous - faster objects break stronger
-bondResRatio	= 10 # fluid resistance of bonds
+bondResRatio	= 1 # fluid resistance of bonds
 minAttachment 	= 0.01
-maxAttachment 	= 0.99
+maxAttachment 	= 0.5
 odorDegrade 	= 0.9
 enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.9
@@ -64,13 +68,13 @@ maxChlorophyl	= 1000
 maxEnzyme	= 1000
 maxTransporter	= 1000
 divisionTime	= 5
-geneInit	= 0.001
+geneInit	= 0.1
 ### bonds
 maxBonds 	= 6
-maxBondLen	= 1000
-bondStiff 	= 5000
-bondDamp 	= 10
-bondRatio 	= 500		# activation to bond length
+maxBondLen	= 500
+bondStiff 	= 500
+bondDamp 	= 100
+bondRatio 	= 200		# activation to bond length
 bondChangeRate	= 1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
 bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
@@ -300,6 +304,7 @@ class Cell(Particle):
 		self.bonding 		= self.outputs[5,0]				# OUT bonding propensity
 		self.bLength 		= self.outputs[6,0]				# OUT bond length
 		self.attachment 	= self.outputs[7,0]				# OUT attachment to surface
+# 		self.attachment 	= 0
 		growChlorophyl 		= self.outputs[8,0]				# OUT clorophyl growing
 		growEnzyme 		= self.outputs[9,0]				# OUT clorophyl growing
 		growTransporter 	= self.outputs[10,0]				# OUT clorophyl growing
@@ -538,7 +543,6 @@ class Cell(Particle):
 				if self.age > divisionTime:
 					bond.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
-# 				targetLength = self.bLength*bondRatio + other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
 				if bond.rest_length > maxBondLen:
 					space.remove(bond)
@@ -547,24 +551,20 @@ class Cell(Particle):
 		velocVec = self.shape.body.velocity
 		if velocVec.length == 0: return
 		# fluid resistance of bonds
-# 		if len(self.shape.bdy.constraints): 
-# 			dragVec = pmunk.vec2d.Vec2d(0, 0)
-# 			for bond inself.shape.body.constraints: # go through all bonds
-# 				pos = bond.cellA.shape.body.position
-# 				pos = bond.cellB.shape.body.position
-# 				bonVec = posA - posB
-# 				if ondVec.length == 0: continue
-# 				bonVec.angle_degrees += 90 # get normal vecor to bond
-# 				ange = velocVec.get_angle_degrees_between(bondVec)
-# 				if ngle > 90 or angle < -90: # rotate if necessary
-# 				       dragVec += bondVec.projection(velocVec)
-# 				els:
-# 				       dragVec -= bondVec.projection(velocVec)
-# 			dragVec *= ondResRatio
-# 			if dragVec.et_length() > velocVec.get_length(): # avoid accelaration via resistance
-# 				sel.shape.body.velocity.length = 0
-# 			else:
-# 				sel.shape.body.velocity.length -= dragVec
+		dragVec = pymunk.vec2d.Vec2d(0, 0)
+		for bond in self.shape.body.constraints: # go through all bonds
+			posA = bond.cellA.shape.body.position
+			posB = bond.cellB.shape.body.position
+			bondVec = posA - posB
+			if bondVec.length == 0: continue
+			bondVec.angle_degrees += 90 # get normal vecor to bond
+			angle = velocVec.get_angle_degrees_between(bondVec)
+			if angle > 90 or angle < -90: # rotate if necessary
+			       dragVec += bondVec
+			else:
+			       dragVec -= bondVec
+		dragVec *= bondResRatio
+		self.shape.body.apply_force_at_local_point(dragVec,(0,0))
 		# fluid resistance of body
 		viscRatio = float(e ** (- velocVec.get_length()*viscosity*max(minAttachment, min( maxAttachment, self.attachment)))) 
 		self.shape.body.velocity *= viscRatio
@@ -770,26 +770,40 @@ if args.screensaver:
 
 # load file
 if args.load is not None:
-	with open(args.load, "rb") as file:
+	loadFile = open(args.load, "rb")
+if args.resume:
+	from os import listdir
+	from os.path import isfile, join
+	import re
+	files = [f for f in listdir('saves') if isfile(join('saves', f))]
+	files = [file for file in files if re.match("[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}:[0-9]{2}_[0-9]*.dat", file)]
+	if len(files) == 0:
+		print("No recent saves to resume.")
+		exit(0)
+	files.sort()
+	loadFileName = "./saves/" + files[-1]
+	loadFile = open(loadFileName, "rb")
+
+if args.load is not None or args.resume:
 		string = ""
 		filePointer = None # file pointer to go to after reading parameters
-		for line in file:
+		for line in loadFile:
 			try: # deconding will fail at some point
 				string += line.decode('utf-8')
 			except:
 				break
-			filePointer = file.tell()
+			filePointer = loadFile.tell()
 		if not args.ignore:
 			str_to_parameter(string)
-		file.seek(filePointer)
+		loadFile.seek(filePointer)
 		try:
-			step = pickle.load(file)
-			particles = pickle.load(file)
+			step = pickle.load(loadFile)
+			particles = pickle.load(loadFile)
 			for particle in particles:
 				particle.reincarnate()
 			for particle in particles:
 				particle.reincarnate_bonds()
-			solvent = pickle.load(file)
+			solvent = pickle.load(loadFile)
 			print("Read save file including %d cells at step %d." % (len(particles), step))
 		except EOFError:
 			print("Read parameters file.")
@@ -800,7 +814,6 @@ while running:
 		bonds = [len(list(cell.shape.body.constraints)) for cell in particles]
 		bondR = sum(bonds)/max(1, float(len(particles))) # guard against division by zero
 		print("step:%8d\tcells:%5d\tbond-ratio: %2.2f" % (step, len(particles), bondR), end="\r")
-# 		print("step:%8d\tcells:%5d\tbond-ratio: %2.2f\tsun:%3d,%3d" % (step, len(particles), bondR, sunX, sunY), end="\r")
 		if step % 1000 == 0:
 			print()
 
@@ -829,8 +842,6 @@ while running:
 		for particle in particles: 
 			particle.brownian()
 			particle.step()
-			if step % UVmutateInterval == 0:
-				particle.mutate_UV()
 			if particle.check_division(): 	particlesToAdd.append(particle.divide())
 			if particle.check_remove(): 	particlesToRemove.append(particle)
 
@@ -839,6 +850,10 @@ while running:
 			particles.remove(particle)
 		particles.extend(particlesToAdd)
 		particlesToAdd = []
+
+		if step % UVmutateInterval == 0:
+			for particle in particles: particle.mutate_UV()
+			print("UV event")
 
 		# solvent and light
 		## sun movement
@@ -979,8 +994,6 @@ while running:
 					display = False
 			if event.type == KEYDOWN and event.key == K_SPACE:
 				pause = not pause
-			if event.type == KEYDOWN and event.key == K_d:
-				draw = not draw
 			if event.type == KEYDOWN and event.key == K_l:
 				displayLight = not displayLight
 			if event.type == KEYDOWN and event.key == K_s:
