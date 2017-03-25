@@ -564,6 +564,8 @@ class Cell(Particle):
 			else:
 			       dragVec -= bondVec
 		dragVec *= bondResRatio
+		if velocVec.length - dragVec.length > 0:
+			dragVec = pymunk.vec2d.Vec2d(0, 0)
 		self.shape.body.apply_force_at_local_point(dragVec,(0,0))
 		# fluid resistance of body
 		viscRatio = float(e ** (- velocVec.get_length()*viscosity*max(minAttachment, min( maxAttachment, self.attachment)))) 
