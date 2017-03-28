@@ -812,11 +812,18 @@ if args.load is not None or args.resume:
 # main loop
 while running:
 	if not pause:
-		bonds = [len(list(cell.shape.body.constraints)) for cell in particles]
-		bondR = sum(bonds)/max(1, float(len(particles))) # guard against division by zero
-		print("step:%8d\tcells:%5d\tbond-ratio: %2.2f" % (step, len(particles), bondR), end="\r")
+		print("step:%8d" % (step), end="\r")
+		if step % 100 == 0:
+			bonds = [len(list(cell.shape.body.constraints)) for cell in particles]
+			bondR = sum(bonds)/max(1, float(len(particles))) # guard against division by zero
+			print("step:%8d\tcells:%5d\tbond-ratio: %2.2f" % (step, len(particles), bondR), end="\r")
 		if step % 1000 == 0:
-			print()
+			weights = []
+			for particle in particles:
+				weights.append(particle.weights)
+			weights = np.array(weights)
+			weightsStd = np.sum(np.std(weights, axis=0)) / (weights.shape[0]*weights.shape[1]) # standard deviation of weights, has to be normalized by number weights
+			print("step:%8d\tcells:%5d\tbond-ratio: %2.2f\tgene_std: %f" % (step, len(particles), bondR, weightsStd))
 
 		if len(particles) == 0 or seed:
 			seed = False
