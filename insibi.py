@@ -46,8 +46,8 @@ sunSigmaY	= 7
 sunMoveStep	= 5 # interval in which sun is moved
 viscosity 	= 0.1 # fluid viscosity. Higher values means more viscous - faster objects break stronger
 bondResRatio	= 1 # fluid resistance of bonds
-minAttachment 	= 0.01
-maxAttachment 	= 0.5
+minAttachment 	= 0.1
+maxAttachment 	= 0.3
 odorDegrade 	= 0.9
 enzymeDegrade 	= 0.9
 wasteDegrade 	= 0.9
@@ -71,10 +71,10 @@ divisionTime	= 5
 geneInit	= 0.1
 ### bonds
 maxBonds 	= 6
-maxBondLen	= 500
+maxBondLen	= 200
 bondStiff 	= 500
 bondDamp 	= 100
-bondRatio 	= 200		# activation to bond length
+bondRatio 	= 100		# activation to bond length
 bondChangeRate	= 1		# change of length per timestep
 bondEnRate 	= 10		# bond energy transfer rate per timestep
 bondSolRate 	= 0.1		# relative amount of solvent transportable at one timestep
@@ -544,7 +544,8 @@ class Cell(Particle):
 					bond.collide_bodies = False # adjecent bodies don't collide -> realistic division behaviour
 				targetLength = self.mass*self.bLength*bondRatio + other.mass*other.bLength*bondRatio + self.shape.radius + other.shape.radius # bond lengths are only between surfaces of cells
 				bond.rest_length += (targetLength - bond.rest_length) * bondChangeRate 
-				if bond.rest_length > maxBondLen:
+				length = (self.shape.body.position - other.shape.body.position).length - (self.shape.radius + other.shape.radius)
+				if length > maxBondLen:
 					space.remove(bond)
 					continue
 	def _adjust_forces(self):
@@ -564,8 +565,6 @@ class Cell(Particle):
 			else:
 			       dragVec -= bondVec
 		dragVec *= bondResRatio
-		if velocVec.length - dragVec.length > 0:
-			dragVec = pymunk.vec2d.Vec2d(0, 0)
 		self.shape.body.apply_force_at_local_point(dragVec,(0,0))
 		# fluid resistance of body
 		viscRatio = float(e ** (- velocVec.get_length()*viscosity*max(minAttachment, min( maxAttachment, self.attachment)))) 
