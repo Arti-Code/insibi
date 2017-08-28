@@ -3,6 +3,8 @@ The **in**-**si**lico **bi**ome is an artificial life simulation using physical 
 Creatures use recurrent neural networks as protein system and have the ability to evolve into 
 multicellular plants and animals.
 
+![example image](https://user-images.githubusercontent.com/22052799/29769289-0b09dd40-8bea-11e7-9941-d4ed750ed534.png)
+
 ## Dependencies
 Insibi is dependent on *numpy*, *pymunk*, *pygame*, *cv2* and *scipy*.
 
