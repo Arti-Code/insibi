@@ -561,9 +561,9 @@ class Cell(Particle):
 			bondVec.angle_degrees += 90 # get normal vecor to bond
 			angle = velocVec.get_angle_degrees_between(bondVec)
 			if angle > 90 or angle < -90: # rotate if necessary
-			       dragVec += bondVec
+				dragVec += bondVec
 			else:
-			       dragVec -= bondVec
+				dragVec -= bondVec
 		dragVec *= bondResRatio
 		self.shape.body.apply_force_at_local_point(dragVec,(0,0))
 		# fluid resistance of body
@@ -586,7 +586,7 @@ def add_borders(space):
 	l2 = pymunk.Segment(body, (bX[0], bY[0]),  (bX[1], bY[0]), 5)
 	l3 = pymunk.Segment(body, (bX[1], bY[1]),  (bX[0], bY[1]), 5)
 	l4 = pymunk.Segment(body, (bX[1], bY[1]),  (bX[1], bY[0]), 5)
-	space.add(l1, l2, l3, l4)
+	space.add(body, l1, l2, l3, l4)
 	return l1,l2, l3, l4
 def draw_lines(screen, lines):
 	for line in lines:
